@@ -1,42 +1,21 @@
-# Flask and web framework
 Flask==2.3.3
 Flask-CORS==4.0.0
 requests==2.31.0
 Werkzeug==2.3.7
-
-# Core dependencies
 python-dotenv==1.0.0
 Pillow==10.0.0
 numpy==1.24.3
-
-# Audio processing
 openai-whisper==20231117
 pydub==0.25.1
-
-# Computer Vision and Image Processing
 opencv-python-headless==4.8.0.76
 scikit-image==0.21.0
 scipy==1.11.1
-
-# OCR
 easyocr==1.7.0
-
-# Machine Learning (required for MaskFormer and other models)
-# Using versions compatible with Python 3.12
 torch>=2.2.0
 torchvision>=0.17.0
 transformers==4.35.0
-
-# Object Detection
 ultralytics==8.0.196
-
-# MedSAM Dependencies - use supabase package (not supabase-py)
 supabase==2.3.4
 aiohttp==3.9.1
-
-# HuggingFace Space Client (for remote segmentation API)
-# Compatible version to avoid conflict with transformers
-gradio-client==0.9.0
-
-# OpenAI API
+gradio-client==0.7.0
 openai==1.3.0
