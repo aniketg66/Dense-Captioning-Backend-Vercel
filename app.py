@@ -9,35 +9,88 @@ if os.path.exists(mmcv_path) and mmcv_path not in sys.path:
 
 from flask import Flask, render_template, request, jsonify, make_response
 from flask_cors import CORS
-import whisper
 import json
 from datetime import datetime
-import torch
 import numpy as np
 from PIL import Image
 import base64
 from io import BytesIO
 import uuid
-from pydub import AudioSegment
-from ultralytics import YOLO
-from skimage import measure
-import torchvision
-from torchvision.models.detection import maskrcnn_resnet50_fpn_v2, MaskRCNN_ResNet50_FPN_V2_Weights
 import io
 import colorsys
-from skimage.measure import label, find_contours, approximate_polygon
 import traceback
-# segment_anything import removed - using HuggingFace Space API instead
-# from segment_anything import sam_model_registry, SamPredictor
 from openai import OpenAI
 from dotenv import load_dotenv
-from transformers import AutoImageProcessor, MaskFormerForInstanceSegmentation
-from scipy import ndimage
-import easyocr
-import cv2
 import tempfile
 from werkzeug.utils import secure_filename
 import requests
+
+# Heavy ML imports - make optional for Vercel deployment
+try:
+    import whisper
+    WHISPER_AVAILABLE = True
+except ImportError:
+    WHISPER_AVAILABLE = False
+    print("Warning: whisper not available")
+
+try:
+    import torch
+    import torchvision
+    from torchvision.models.detection import maskrcnn_resnet50_fpn_v2, MaskRCNN_ResNet50_FPN_V2_Weights
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    print("Warning: torch/torchvision not available")
+
+try:
+    from transformers import AutoImageProcessor, MaskFormerForInstanceSegmentation
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    print("Warning: transformers not available")
+
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
+    print("Warning: ultralytics not available")
+
+try:
+    from skimage import measure
+    from skimage.measure import label, find_contours, approximate_polygon
+    SKIMAGE_AVAILABLE = True
+except ImportError:
+    SKIMAGE_AVAILABLE = False
+    print("Warning: scikit-image not available")
+
+try:
+    from scipy import ndimage
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("Warning: scipy not available")
+
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    print("Warning: easyocr not available")
+
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    print("Warning: opencv-python not available")
+
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    print("Warning: pydub not available")
 
 # Import PDF extraction functionality
 from pdf_extractor import extract_images_from_pdf
@@ -64,15 +117,41 @@ if os.environ.get("VERCEL"):
 else:
     PROCESSED_IMAGES_FILE = "processed_images.json"
 
-# Initialize Whisper model
-whisper_model = whisper.load_model("base")
+# Initialize Whisper model (lazy loading for Vercel)
+whisper_model = None
+def get_whisper_model():
+    global whisper_model
+    if not WHISPER_AVAILABLE:
+        return None
+    if whisper_model is None:
+        try:
+            whisper_model = whisper.load_model("base")
+        except Exception as e:
+            print(f"Warning: Could not load Whisper model: {e}")
+            whisper_model = False  # Mark as failed
+    return whisper_model if whisper_model else None
 
-# Initialize MaskFormer
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-maskformer_processor = AutoImageProcessor.from_pretrained("facebook/maskformer-swin-base-ade")
-maskformer_model = MaskFormerForInstanceSegmentation.from_pretrained("facebook/maskformer-swin-base-ade")
-maskformer_model.to(device)
-maskformer_model.eval()
+# Initialize MaskFormer (lazy loading for Vercel)
+maskformer_processor = None
+maskformer_model = None
+device = None
+
+def get_maskformer():
+    global maskformer_processor, maskformer_model, device
+    if not TRANSFORMERS_AVAILABLE or not TORCH_AVAILABLE:
+        return None
+    if maskformer_model is None:
+        try:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            maskformer_processor = AutoImageProcessor.from_pretrained("facebook/maskformer-swin-base-ade")
+            maskformer_model = MaskFormerForInstanceSegmentation.from_pretrained("facebook/maskformer-swin-base-ade")
+            maskformer_model.to(device)
+            maskformer_model.eval()
+            print("MaskFormer model loaded successfully")
+        except Exception as e:
+            print(f"Warning: Could not load MaskFormer model: {e}")
+            maskformer_model = False  # Mark as failed
+    return maskformer_model if maskformer_model else None
 
 # Define image transform for Mask R-CNN
 transform = torchvision.transforms.Compose([
@@ -461,6 +540,10 @@ def pre_segment():
         print(f"Processing image of size: {width}x{height}")
         
         # Preprocess image for MaskFormer
+        maskformer_model = get_maskformer()
+        if not maskformer_model or not maskformer_processor:
+            return jsonify({'error': 'MaskFormer model not available'}), 503
+        
         inputs = maskformer_processor(images=image, return_tensors="pt").to(device)
         
         # Run MaskFormer prediction
@@ -653,6 +736,10 @@ def detect_objects():
         image_height, image_width = np.array(image).shape[:2]
         
         # Preprocess image for MaskFormer
+        maskformer_model = get_maskformer()
+        if not maskformer_model or not maskformer_processor:
+            return jsonify({"error": "MaskFormer model not available"}), 503
+        
         inputs = maskformer_processor(images=image, return_tensors="pt").to(device)
         
         # Run MaskFormer prediction
@@ -850,6 +937,9 @@ def transcribe():
         segment_path = os.path.join(UPLOADS_DIR, f"segment_{timestamp}_{i}.wav")
         segment.export(segment_path, format="wav")
         
+        whisper_model = get_whisper_model()
+        if not whisper_model:
+            return jsonify({"error": "Whisper model not available"}), 503
         result = whisper_model.transcribe(segment_path)
         segment_transcription = result["text"]
         
