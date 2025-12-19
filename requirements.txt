@@ -22,8 +22,9 @@ scipy==1.11.1
 easyocr==1.7.0
 
 # Machine Learning (required for MaskFormer and other models)
-torch==2.1.0
-torchvision==0.16.0
+# Using versions compatible with Python 3.12
+torch>=2.2.0
+torchvision>=0.17.0
 transformers==4.35.0
 
 # Object Detection
