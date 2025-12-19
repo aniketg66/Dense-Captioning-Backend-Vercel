@@ -1,0 +1,12 @@
+{
+    "image_filename": "landscape1.jpg",
+    "objects": [
+        {
+            "id": 1748632465792,
+            "name": "Pine tree",
+            "x": 101,
+            "y": 55
+        }
+    ],
+    "timestamp": "2025-05-30T15:14:25.798120"
+}

@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Voiceover Platform</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .image-container {
+            position: relative;
+            margin-bottom: 20px;
+            display: inline-block;
+            max-width: 100%;
+        }
+        #currentImage {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+        #markersContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .marker {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background-color: red;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: auto;
+            cursor: pointer;
+            z-index: 10;
+        }
+        .marker-label {
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+        .marker:hover .marker-label {
+            opacity: 1;
+        }
+        #objectDialog {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        #objectDialog.hidden {
+            display: none;
+        }
+        .dialog-content {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 400px;
+        }
+        .active {
+            background-color: #ef4444 !important;
+        }
+        .active:hover {
+            background-color: #dc2626 !important;
+        }
+        .segmentation-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .region {
+            position: absolute;
+            pointer-events: auto;
+            cursor: pointer;
+            transition: filter 0.3s ease;
+        }
+        .region:hover {
+            filter: brightness(1.2);
+        }
+        .region.dimmed {
+            filter: brightness(0.7);
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        .recording {
+            color: red;
+        }
+        #transcription {
+            margin-top: 20px;
+            white-space: pre-wrap;
+        }
+        .segment {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold text-center mb-8">Image Voiceover Platform</h1>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <!-- Left Column: Image and Controls -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="image-container">
+                    <img id="currentImage" src="" alt="Current Image" class="rounded-lg">
+                    <div id="markersContainer"></div>
+                </div>
+                
+                <div class="flex flex-col space-y-4">
+                    <div class="flex space-x-4 mb-4">
+                        <button id="recordButton" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                            Start Recording
+                        </button>
+                        <button id="markObjectsButton" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                            Mark Objects
+                        </button>
+                        <button id="ocrButton" class="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600">
+                            Perform OCR
+                        </button>
+                    </div>
+                    <div id="recordingTimer" class="text-xl font-semibold text-center hidden">00:00</div>
+                    
+                    <!-- Object List -->
+                    <div class="mt-4">
+                        <h3 class="text-lg font-semibold mb-2">Marked Objects</h3>
+                        <div id="objectList" class="bg-gray-50 p-4 rounded-lg max-h-60 overflow-y-auto">
+                            <!-- Objects will be listed here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Transcription -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">Transcription</h2>
+                <div id="transcription" class="mb-4 p-4 bg-gray-50 rounded-lg min-h-[200px]"></div>
+                
+                <h2 class="text-xl font-semibold mb-4">Refined Transcription</h2>
+                <textarea id="refinedTranscription" class="w-full p-4 bg-gray-50 rounded-lg min-h-[200px] border border-gray-300"></textarea>
+                
+                <button id="saveRefined" class="mt-4 bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded">
+                    Save Refined Transcription
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Object Marking Dialog -->
+    <div id="objectDialog" class="hidden">
+        <div class="dialog-content">
+            <h3 class="text-lg font-semibold mb-4">Mark Object</h3>
+            <input type="text" id="objectName" placeholder="Enter object name/tag" 
+                   class="w-full p-2 border border-gray-300 rounded mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <div class="flex justify-end space-x-2">
+                <button id="cancelMarkObject" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
+                    Cancel
+                </button>
+                <button id="saveMarkObject" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded">
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add OCR results section -->
+    <div class="grid grid-cols-2 gap-4">
+        <div>
+            <div class="image-container relative">
+                <img id="currentImage" class="w-full" alt="Current image" />
+                <div id="markersContainer" class="absolute top-0 left-0 w-full h-full pointer-events-none"></div>
+            </div>
+            <div id="ocrResults" class="mt-4"></div>
+        </div>
+        <div>
+            <div class="bg-white rounded-lg shadow p-4 mb-4">
+                <h3 class="text-lg font-semibold mb-2">Marked Objects</h3>
+                <div id="objectList" class="space-y-2"></div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-lg font-semibold mb-2">Transcription</h3>
+                <div id="transcription" class="mb-4 p-2 bg-gray-100 rounded"></div>
+                <h3 class="text-lg font-semibold mb-2">Refined Description</h3>
+                <textarea id="refinedTranscription" class="w-full h-32 p-2 border rounded"></textarea>
+                <button id="saveRefined" class="mt-2 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    Save Refined
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add segment tooltip -->
+    <div class="segment-tooltip" style="display: none; position: absolute; background: rgba(0,0,0,0.8); color: white; padding: 8px; border-radius: 4px; font-size: 14px; pointer-events: none;"></div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html> 
