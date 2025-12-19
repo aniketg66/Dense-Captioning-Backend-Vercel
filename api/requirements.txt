@@ -4,12 +4,12 @@ requests==2.31.0
 Werkzeug==2.3.7
 python-dotenv==1.0.0
 Pillow==10.0.0
-numpy==1.24.3
+numpy>=1.26.0
 openai-whisper==20231117
 pydub==0.25.1
 opencv-python-headless==4.8.0.76
-scikit-image==0.21.0
-scipy==1.11.1
+scikit-image>=0.21.0
+scipy>=1.11.0
 easyocr==1.7.0
 torch>=2.2.0
 torchvision>=0.17.0
