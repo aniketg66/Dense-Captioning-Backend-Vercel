@@ -41,7 +41,6 @@ import requests
 
 # Import PDF extraction functionality
 from pdf_extractor import extract_images_from_pdf
-from segregate_image import segment_image
 
 # Load environment variables from backend directory .env
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
@@ -58,11 +57,7 @@ else:
     print("Warning: OPENAI_API_KEY not set. GPT refinement will be disabled.")
 
 # State file for processed images per user
-# Use /tmp in Vercel environment
-if os.environ.get("VERCEL"):
-    PROCESSED_IMAGES_FILE = "/tmp/processed_images.json"
-else:
-    PROCESSED_IMAGES_FILE = "processed_images.json"
+PROCESSED_IMAGES_FILE = "processed_images.json"
 
 # Initialize Whisper model
 whisper_model = whisper.load_model("base")
@@ -118,13 +113,7 @@ print(f"Segmentation will use HuggingFace Space: {HUGGINGFACE_SPACE_URL}")
 print("No local SAM/MedSAM models will be loaded")
 
 # Create necessary directories
-# Use /tmp for Vercel serverless environment, otherwise use local directories
-# Check for Vercel environment (can be set by Vercel or manually for testing)
-VERCEL_ENV = os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV")
-if VERCEL_ENV:
-    BASE_DIR = "/tmp"
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 TRANSCRIPTIONS_DIR = os.path.join(BASE_DIR, "transcriptions")

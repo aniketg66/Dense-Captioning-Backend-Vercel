@@ -88,15 +88,6 @@ if GRADIO_CLIENT_AVAILABLE and USE_HF_FOR_MASKS:
         logger.warning(f"Could not connect to HuggingFace Space: {e}")
         hf_mask_client = None
 
-# Scientific Image Analyzer (keeping for compatibility but not using for processing)
-try:
-    from science_analyzer import ScientificImageAnalyzer
-    science_analyzer = ScientificImageAnalyzer()
-    logger.info("Scientific Image Analyzer loaded successfully (for compatibility)")
-except Exception as e:
-    logger.warning(f"Could not load Scientific Image Analyzer: {e}")
-    science_analyzer = None
-
 # ─── HF MASK GENERATION API ────────────────────────────────────────────────
 
 def generate_masks_via_huggingface(image_path: str) -> list:
