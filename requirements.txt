@@ -11,8 +11,9 @@ opencv-python-headless==4.8.0.76
 scikit-image>=0.21.0
 scipy>=1.11.0
 easyocr==1.7.0
-torch>=2.2.0
-torchvision>=0.17.0
+# PyTorch CPU-only (installed separately in Dockerfile BEFORE requirements.txt)
+# torch>=2.2.0
+# torchvision>=0.17.0
 transformers==4.35.0
 ultralytics==8.0.196
 supabase==2.3.4
