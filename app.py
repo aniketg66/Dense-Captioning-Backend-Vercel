@@ -58,15 +58,29 @@ else:
 # State file for processed images per user
 PROCESSED_IMAGES_FILE = "processed_images.json"
 
-# Initialize Whisper model
-whisper_model = whisper.load_model("base")
+# Initialize Whisper model with a smaller variant to reduce memory usage on Railway
+whisper_model = whisper.load_model("tiny")
 
-# Initialize MaskFormer
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-maskformer_processor = AutoImageProcessor.from_pretrained("facebook/maskformer-swin-base-ade")
-maskformer_model = MaskFormerForInstanceSegmentation.from_pretrained("facebook/maskformer-swin-base-ade")
-maskformer_model.to(device)
-maskformer_model.eval()
+# Lazy initialization for MaskFormer to avoid heavy startup memory on Railway
+device = torch.device("cpu")
+maskformer_processor = None
+maskformer_model = None
+
+def get_maskformer():
+    """
+    Lazily load MaskFormer model and processor.
+    This avoids loading 400MB+ of weights at import time and reduces OOM risk.
+    """
+    global maskformer_processor, maskformer_model, device
+    if maskformer_processor is None or maskformer_model is None:
+        from transformers import AutoImageProcessor, MaskFormerForInstanceSegmentation
+        device = torch.device("cpu")
+        maskformer_processor = AutoImageProcessor.from_pretrained("facebook/maskformer-swin-base-ade")
+        maskformer_model = MaskFormerForInstanceSegmentation.from_pretrained("facebook/maskformer-swin-base-ade")
+        maskformer_model.to(device)
+        maskformer_model.eval()
+        print("MaskFormer model loaded lazily")
+    return maskformer_processor, maskformer_model, device
 
 # Define image transform for Mask R-CNN
 transform = torchvision.transforms.Compose([
@@ -448,15 +462,18 @@ def pre_segment():
         height, width = image_array.shape[:2]
         print(f"Processing image of size: {width}x{height}")
         
+        # Lazily load MaskFormer to reduce startup memory
+        processor, model, dev = get_maskformer()
+
         # Preprocess image for MaskFormer
-        inputs = maskformer_processor(images=image, return_tensors="pt").to(device)
+        inputs = processor(images=image, return_tensors="pt").to(dev)
         
         # Run MaskFormer prediction
         with torch.no_grad():
-            outputs = maskformer_model(**inputs)
+            outputs = model(**inputs)
         
         # Get the segmentation results
-        predicted_semantic_map = maskformer_processor.post_process_semantic_segmentation(
+        predicted_semantic_map = processor.post_process_semantic_segmentation(
             outputs, target_sizes=[(height, width)]
         )[0]
         
@@ -640,12 +657,15 @@ def detect_objects():
             
         image_height, image_width = np.array(image).shape[:2]
         
+        # Lazily load MaskFormer to reduce startup memory
+        processor, model, dev = get_maskformer()
+
         # Preprocess image for MaskFormer
-        inputs = maskformer_processor(images=image, return_tensors="pt").to(device)
+        inputs = processor(images=image, return_tensors="pt").to(dev)
         
         # Run MaskFormer prediction
         with torch.no_grad():
-            outputs = maskformer_model(**inputs)
+            outputs = model(**inputs)
         
         # Get class predictions and scores
         class_logits = outputs.class_queries_logits
