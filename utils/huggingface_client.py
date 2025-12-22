@@ -41,11 +41,22 @@ class HuggingFaceSegmentationClient:
         if self.client is None:
             print(f"Connecting to HuggingFace Space: {self.space_url}")
             try:
-                self.client = Client(self.space_url)
+                # Get HuggingFace token from environment variable
+                hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
+                
+                if hf_token:
+                    print("Using HuggingFace token for authentication")
+                    self.client = Client(self.space_url, hf_token=hf_token)
+                else:
+                    print("No HF_TOKEN found - connecting without authentication")
+                    print("⚠️  If the Space is private or requires auth, set HF_TOKEN environment variable")
+                    self.client = Client(self.space_url)
+                
                 self._initialized = True
                 print("✓ Connected to HuggingFace Space successfully!")
             except Exception as e:
                 print(f"Failed to connect to HuggingFace Space: {e}")
+                print("💡 Tip: If authentication failed, check your HF_TOKEN environment variable")
                 raise
         return self.client
     
