@@ -7,7 +7,18 @@ import tempfile
 import os
 import numpy as np
 from PIL import Image
-from gradio_client import Client, handle_file
+try:
+    from gradio_client import Client
+    try:
+        from gradio_client import handle_file
+    except ImportError:
+        # For older versions of gradio-client, handle_file might not exist
+        # We'll use the file path directly
+        def handle_file(file_path):
+            return file_path
+except ImportError:
+    Client = None
+    handle_file = None
 
 
 class HuggingFaceSegmentationClient:

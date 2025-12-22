@@ -58,8 +58,16 @@ else:
 # State file for processed images per user
 PROCESSED_IMAGES_FILE = "processed_images.json"
 
-# Initialize Whisper model with a smaller variant to reduce memory usage on Railway
-whisper_model = whisper.load_model("tiny")
+# Lazy initialization for Whisper to avoid heavy startup memory on Railway
+whisper_model = None
+
+def get_whisper_model():
+    """Lazily load Whisper model to reduce memory usage"""
+    global whisper_model
+    if whisper_model is None:
+        whisper_model = whisper.load_model("tiny")
+        print("Whisper model loaded lazily")
+    return whisper_model
 
 # Lazy initialization for MaskFormer to avoid heavy startup memory on Railway
 device = torch.device("cpu")
@@ -99,7 +107,7 @@ ADE20K_CLASSES = [
     "hill", "bench", "countertop", "stove", "palm", "kitchen island", "computer", "horse", "unknown"
 ]
 
-print("MaskFormer model loaded successfully")
+# MaskFormer will be loaded lazily when needed via get_maskformer()
 
 # =============================================================================
 # HUGGINGFACE SPACE INTEGRATION (No local ML models for segmentation)
@@ -146,8 +154,16 @@ SAMPLE_IMAGES = [
     "text.jpg"
 ]
 
-# Initialize EasyOCR reader
-ocr_reader = easyocr.Reader(['en'])  # Initialize for English
+# Lazy initialization for EasyOCR to avoid heavy startup memory on Railway
+ocr_reader = None
+
+def get_ocr_reader():
+    """Lazily load EasyOCR reader to reduce memory usage"""
+    global ocr_reader
+    if ocr_reader is None:
+        ocr_reader = easyocr.Reader(['en'])
+        print("EasyOCR reader loaded lazily")
+    return ocr_reader
 
 # HF Space configuration using gradio_client - Direct URL approach
 HF_SPACE_URL = "https://hanszhu-dense-captioning-platform.hf.space"
@@ -166,8 +182,8 @@ def perform_local_ocr(img_np):
     Returns list of text elements with bbox and confidence
     """
     try:
-        # Use the existing EasyOCR reader from the global scope
-        results = ocr_reader.readtext(img_np)
+        # Use the lazy-loaded EasyOCR reader
+        results = get_ocr_reader().readtext(img_np)
         
         text_elements = []
         for (bbox, text, confidence) in results:
@@ -207,7 +223,13 @@ def call_hf_space_api(image_path):
     Returns the raw API response
     """
     try:
-        from gradio_client import Client, handle_file
+        from gradio_client import Client
+        try:
+            from gradio_client import handle_file
+        except ImportError:
+            # For older versions, use file path directly
+            def handle_file(file_path):
+                return file_path
         
         print(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
         
@@ -726,8 +748,8 @@ def perform_ocr():
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
-        # Perform OCR
-        results = ocr_reader.readtext(image)
+        # Perform OCR using lazy-loaded reader
+        results = get_ocr_reader().readtext(image)
         
         # Format results
         ocr_data = []
@@ -858,7 +880,7 @@ def transcribe():
         segment_path = os.path.join(UPLOADS_DIR, f"segment_{timestamp}_{i}.wav")
         segment.export(segment_path, format="wav")
         
-        result = whisper_model.transcribe(segment_path)
+        result = get_whisper_model().transcribe(segment_path)
         segment_transcription = result["text"]
         
         segmented_transcriptions.append({
