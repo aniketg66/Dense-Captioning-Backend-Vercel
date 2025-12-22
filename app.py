@@ -19,7 +19,6 @@ import base64
 from io import BytesIO
 import uuid
 from pydub import AudioSegment
-from ultralytics import YOLO
 from skimage import measure
 import torchvision
 from torchvision.models.detection import maskrcnn_resnet50_fpn_v2, MaskRCNN_ResNet50_FPN_V2_Weights

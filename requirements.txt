@@ -15,7 +15,6 @@ easyocr==1.7.0
 torch==2.2.0+cpu
 torchvision==0.17.0+cpu
 transformers==4.35.0
-ultralytics==8.0.196
 supabase==2.3.4
 aiohttp==3.9.1
 gradio-client==0.7.0
