@@ -1,0 +1,48 @@
+.git
+__pycache__/
+*.py[cod]
+*.so
+.Python
+venv/
+env/
+ENV/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Large model/checkpoint files
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.pb
+*.onnx
+*.pkl
+*.joblib
+models/
+legend_match_swin/
+medsam python/
+medsam-inference/
+huggingface_space/
+
+# Local data and cache
+uploads/
+transcriptions/
+static/masks/
+static/objects/
+processed_images.json
+
+# Tests and docs not needed in image
+test_*.py
+*_test.py
+*.md
+!README.md
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
