@@ -55,7 +55,20 @@ class HuggingFaceSegmentationClient:
                 self._initialized = True
                 print("✓ Connected to HuggingFace Space successfully!")
             except Exception as e:
+                # Enhanced debug to see non-JSON errors
                 print(f"Failed to connect to HuggingFace Space: {e}")
+                print(f"Exception type: {type(e).__name__}")
+                print(f"Exception repr: {repr(e)}")
+                # Try to dump any response/body if present (gradio_client/network errors)
+                resp = getattr(e, "response", None)
+                if resp is not None:
+                    try:
+                        print(f"Response status: {getattr(resp, 'status', getattr(resp, 'status_code', 'n/a'))}")
+                        body = getattr(resp, 'text', None) or getattr(resp, 'body', None)
+                        if body:
+                            print(f"Response body (first 500 chars): {str(body)[:500]}")
+                    except Exception as dbg_err:
+                        print(f"(debug printing response failed: {dbg_err})")
                 print("💡 Tip: If authentication failed, check your HF_TOKEN environment variable")
                 raise
         return self.client
