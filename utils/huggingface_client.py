@@ -45,7 +45,7 @@ class HuggingFaceSegmentationClient:
                 hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
                 
                 if hf_token:
-                    print("Using HuggingFace token for authentication")
+                    print(f"Using HuggingFace token for authentication (len={len(hf_token)})")
                     self.client = Client(self.space_url, hf_token=hf_token)
                 else:
                     print("No HF_TOKEN found - connecting without authentication")
