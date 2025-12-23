@@ -68,12 +68,20 @@ hf_mask_client = None
 USE_HF_FOR_MASKS = os.getenv("USE_HF_FOR_MASKS", "true").lower() == "true"
 
 if GRADIO_CLIENT_AVAILABLE and USE_HF_FOR_MASKS:
+    # IMPORTANT: Remove proxy env vars BEFORE initializing Client
+    # gradio-client 0.7.0 reads these but doesn't support proxy parameter
+    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+    saved_proxy_vars_init = {}
+    for var in proxy_vars:
+        if var in os.environ:
+            saved_proxy_vars_init[var] = os.environ.pop(var)
+    
     try:
         logger.info(f"Connecting to HuggingFace Space: {MEDSAM_HF_SPACE}")
         # Get HuggingFace token from environment variable
         hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
         
-        # Try to initialize client - handle proxy parameter error if it occurs
+        # Initialize client - proxy env vars already removed above
         try:
             if hf_token:
                 logger.info("Using HuggingFace token for authentication")
@@ -81,15 +89,13 @@ if GRADIO_CLIENT_AVAILABLE and USE_HF_FOR_MASKS:
             else:
                 logger.info("No HF_TOKEN found - connecting without authentication")
                 hf_mask_client = GradioClient(MEDSAM_HF_SPACE)
-        except TypeError as te:
-            if "proxy" in str(te).lower():
-                logger.warning(f"Proxy parameter error (likely gradio-client version issue): {te}")
-                logger.warning("Attempting connection without proxy handling...")
-                # Try again with minimal parameters
-                if hf_token:
-                    hf_mask_client = GradioClient(MEDSAM_HF_SPACE, hf_token=hf_token)
-                else:
-                    hf_mask_client = GradioClient(MEDSAM_HF_SPACE)
+        except (TypeError, ValueError) as te:
+            error_msg = str(te).lower()
+            if "proxy" in error_msg or "unexpected keyword" in error_msg:
+                logger.error(f"Client initialization failed with proxy error: {te}")
+                logger.error("gradio-client 0.7.0 doesn't support proxy parameter")
+                logger.error("HuggingFace mask generation will be disabled")
+                hf_mask_client = None
             else:
                 raise
         
@@ -109,6 +115,10 @@ if GRADIO_CLIENT_AVAILABLE and USE_HF_FOR_MASKS:
         logger.warning(f"Could not connect to HuggingFace Space: {e}")
         logger.warning(f"Error details: {type(e).__name__}: {str(e)}")
         hf_mask_client = None
+    finally:
+        # Restore proxy environment variables
+        for var, value in saved_proxy_vars_init.items():
+            os.environ[var] = value
 
 # ─── HF MASK GENERATION API ────────────────────────────────────────────────
 
@@ -339,29 +349,42 @@ def call_hf_space_api(image_path):
     Call the Dense Captioning Platform API using gradio_client to analyze a scientific image
     Returns the raw API response
     """
+    # IMPORTANT: Remove proxy env vars BEFORE importing gradio_client
+    # gradio-client 0.7.0 reads these but doesn't support proxy parameter
+    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+    saved_proxy_vars = {}
+    for var in proxy_vars:
+        if var in os.environ:
+            saved_proxy_vars[var] = os.environ.pop(var)
+            logger.debug(f"Temporarily removed {var} to avoid gradio-client proxy error")
+    
     try:
-        from gradio_client import Client, handle_file
+        # Check if gradio_client is available
+        try:
+            from gradio_client import Client, handle_file
+        except ImportError:
+            logger.error("gradio_client not available - cannot call HF Space API")
+            return None
         
         logger.info(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
         
         # Get HuggingFace token from environment variable
         hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
         
-        # Initialize client with direct URL (working approach)
-        # Handle proxy parameter error if gradio-client version doesn't support it
+        # Initialize client with direct URL
+        # gradio-client 0.7.0 doesn't support proxy parameter, so we removed proxy env vars above
         try:
             if hf_token:
                 client = Client("https://hanszhu-dense-captioning-platform.hf.space", hf_token=hf_token)
             else:
                 client = Client("https://hanszhu-dense-captioning-platform.hf.space")
-        except TypeError as te:
-            if "proxy" in str(te).lower():
-                logger.warning(f"Proxy parameter error, retrying: {te}")
-                # Retry without proxy handling
-                if hf_token:
-                    client = Client("https://hanszhu-dense-captioning-platform.hf.space", hf_token=hf_token)
-                else:
-                    client = Client("https://hanszhu-dense-captioning-platform.hf.space")
+        except (TypeError, ValueError) as te:
+            error_msg = str(te).lower()
+            if "proxy" in error_msg or "unexpected keyword" in error_msg:
+                logger.error(f"Client initialization failed with proxy error: {te}")
+                logger.error("gradio-client 0.7.0 doesn't support proxy parameter")
+                logger.error("Skipping HF Space API call - this is a gradio-client version limitation")
+                return None
             else:
                 raise
         
@@ -385,6 +408,10 @@ def call_hf_space_api(image_path):
         import traceback
         logger.error(f"Full traceback: {traceback.format_exc()}")
         return None
+    finally:
+        # Always restore proxy environment variables
+        for var, value in saved_proxy_vars.items():
+            os.environ[var] = value
 
 def parse_hf_space_response(hf_response):
     """
