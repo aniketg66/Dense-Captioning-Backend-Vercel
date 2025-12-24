@@ -51,6 +51,7 @@ In Railway Dashboard → Your Project → Variables, add:
 - `SUPABASE_KEY` - Your Supabase anon/service key
 
 **Optional:**
+- `HF_TOKEN` or `HUGGINGFACE_TOKEN` - Your HuggingFace token for accessing MedSAM Space (required if Space is private)
 - `OPENAI_API_KEY` - For GPT transcription refinement
 - `PORT` - Railway sets this automatically, but you can override
 

@@ -22,12 +22,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Try to import gradio_client for HuggingFace API
+# IMPORTANT: Remove proxy env vars BEFORE importing to avoid proxy parameter errors
+# gradio-client 0.7.0 reads these but doesn't support proxy parameter
+_proxy_vars_backup = {}
+_proxy_vars_to_remove = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+for var in _proxy_vars_to_remove:
+    if var in os.environ:
+        _proxy_vars_backup[var] = os.environ.pop(var)
+
 try:
     from gradio_client import Client as GradioClient, handle_file
     GRADIO_CLIENT_AVAILABLE = True
 except ImportError:
     logger.warning("gradio_client not installed. Install with: pip install gradio_client")
     GRADIO_CLIENT_AVAILABLE = False
+finally:
+    # Restore proxy vars after import check
+    for var, value in _proxy_vars_backup.items():
+        os.environ[var] = value
+    _proxy_vars_backup = {}
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────
 SUPABASE_URL       = os.getenv("REACT_APP_SUPABASE_URL")
