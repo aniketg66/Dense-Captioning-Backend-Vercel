@@ -16,7 +16,25 @@ import multiprocessing
 class SupabaseManager:
     def __init__(self):
         """Initialize Supabase client"""
-        self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Temporarily remove proxy environment variables to prevent
+        # "Client.__init__() got an unexpected keyword argument 'proxy'" error
+        # Railway sets these, but supabase client doesn't support proxy parameter
+        proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+        saved_proxy_vars = {}
+        
+        try:
+            # Save and remove proxy vars
+            for var in proxy_vars:
+                if var in os.environ:
+                    saved_proxy_vars[var] = os.environ[var]
+                    del os.environ[var]
+            
+            # Create Supabase client without proxy interference
+            self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        finally:
+            # Restore proxy vars
+            for var, value in saved_proxy_vars.items():
+                os.environ[var] = value
     
     def get_image_data(self, image_id: str) -> Dict[str, Any]:
         """Fetch image data from the images table"""
