@@ -1,6 +1,16 @@
+# IMPORTANT: Remove proxy environment variables BEFORE importing supabase
+# Railway sets these, but httpx (used by supabase) doesn't support proxy parameter
+# in the version being used, causing: TypeError: Client.__init__() got an unexpected keyword argument 'proxy'
+import os
+
+_proxy_vars_backup = {}
+_proxy_vars_to_remove = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+for var in _proxy_vars_to_remove:
+    if var in os.environ:
+        _proxy_vars_backup[var] = os.environ.pop(var)
+
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY, STORAGE_BUCKET, MASKS_BUCKET, EMBEDDINGS_BUCKET, STORAGE_FOLDER, IMAGE_NAME, IMAGE_ID
-import os
 import tempfile
 import requests
 import numpy as np
@@ -13,12 +23,16 @@ import aiohttp
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 
+# Restore proxy vars after imports (they're not needed for supabase)
+for var, value in _proxy_vars_backup.items():
+    os.environ[var] = value
+_proxy_vars_backup = {}
+
 class SupabaseManager:
     def __init__(self):
         """Initialize Supabase client"""
-        # Temporarily remove proxy environment variables to prevent
-        # "Client.__init__() got an unexpected keyword argument 'proxy'" error
-        # Railway sets these, but supabase client doesn't support proxy parameter
+        # Remove proxy vars again before create_client() in case httpx reads them
+        # when creating Client instances (not just at import time)
         proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
         saved_proxy_vars = {}
         
