@@ -3,11 +3,44 @@
 # in the version being used, causing: TypeError: Client.__init__() got an unexpected keyword argument 'proxy'
 import os
 
-_proxy_vars_backup = {}
+# Permanently remove proxy vars - DO NOT restore them
+# They interfere with httpx (used by supabase) and are not needed
 _proxy_vars_to_remove = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
 for var in _proxy_vars_to_remove:
     if var in os.environ:
-        _proxy_vars_backup[var] = os.environ.pop(var)
+        del os.environ[var]
+
+# Monkey-patch httpx.Client to ignore proxy parameter if not supported
+# This prevents TypeError when httpx tries to use proxy parameter that's not supported
+def _patch_httpx_client():
+    try:
+        import httpx
+        if hasattr(httpx.Client.__init__, '_proxy_patched'):
+            return  # Already patched
+        
+        _original_httpx_client_init = httpx.Client.__init__
+        
+        def _patched_httpx_client_init(self, *args, **kwargs):
+            # Remove proxy parameter - httpx version might not support it
+            kwargs.pop('proxy', None)
+            # Call original init without proxy
+            try:
+                return _original_httpx_client_init(self, *args, **kwargs)
+            except TypeError as e:
+                # If still fails, try without proxy-related kwargs
+                if 'proxy' in str(e):
+                    kwargs.pop('proxies', None)
+                    return _original_httpx_client_init(self, *args, **kwargs)
+                raise
+        
+        httpx.Client.__init__ = _patched_httpx_client_init
+        httpx.Client.__init__._proxy_patched = True
+    except (ImportError, AttributeError):
+        # httpx not imported yet or patching failed, will try again after supabase import
+        pass
+
+# Try patching before supabase import
+_patch_httpx_client()
 
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY, STORAGE_BUCKET, MASKS_BUCKET, EMBEDDINGS_BUCKET, STORAGE_FOLDER, IMAGE_NAME, IMAGE_ID
@@ -23,32 +56,16 @@ import aiohttp
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 
-# Restore proxy vars after imports (they're not needed for supabase)
-for var, value in _proxy_vars_backup.items():
-    os.environ[var] = value
-_proxy_vars_backup = {}
+# Apply monkey-patch again after supabase imports httpx (in case it wasn't imported before)
+_patch_httpx_client()
 
 class SupabaseManager:
     def __init__(self):
         """Initialize Supabase client"""
-        # Remove proxy vars again before create_client() in case httpx reads them
-        # when creating Client instances (not just at import time)
-        proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
-        saved_proxy_vars = {}
-        
-        try:
-            # Save and remove proxy vars
-            for var in proxy_vars:
-                if var in os.environ:
-                    saved_proxy_vars[var] = os.environ[var]
-                    del os.environ[var]
-            
-            # Create Supabase client without proxy interference
-            self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        finally:
-            # Restore proxy vars
-            for var, value in saved_proxy_vars.items():
-                os.environ[var] = value
+        # Proxy vars are permanently removed at module level (see top of file)
+        # httpx is monkey-patched to ignore proxy parameter
+        # This ensures supabase client works on Railway without proxy errors
+        self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     
     def get_image_data(self, image_id: str) -> Dict[str, Any]:
         """Fetch image data from the images table"""
