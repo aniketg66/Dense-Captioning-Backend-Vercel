@@ -134,12 +134,11 @@ print(f"Segmentation will use HuggingFace Space: {HUGGINGFACE_SPACE_URL}")
 print("No local SAM/MedSAM models will be loaded")
 
 # Create necessary directories
-# Use /tmp for Vercel (serverless functions), otherwise use local directory
-BASE_DIR = "/tmp" if os.environ.get("VERCEL") else os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 TRANSCRIPTIONS_DIR = os.path.join(BASE_DIR, "transcriptions")
-STATIC_IMAGES_DIR = os.path.join(BASE_DIR, "static", "images") if not os.environ.get("VERCEL") else os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "images")
+STATIC_IMAGES_DIR = os.path.join(BASE_DIR, "static", "images")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(TRANSCRIPTIONS_DIR, exist_ok=True)
@@ -979,9 +978,7 @@ def save_objects():
     
     # Create a unique filename for the objects data
     base_filename = os.path.splitext(image_filename)[0]
-    # Use project root for static files (read-only on Vercel)
-    static_base = os.path.dirname(os.path.abspath(__file__)) if os.environ.get("VERCEL") else BASE_DIR
-    objects_dir = os.path.join(static_base, "static", "objects")
+    objects_dir = os.path.join(BASE_DIR, "static", "objects")
     os.makedirs(objects_dir, exist_ok=True)
     objects_path = os.path.join(objects_dir, f"{base_filename}_objects.json")
     
@@ -998,8 +995,7 @@ def save_objects():
 @app.route('/api/get-objects/<image_filename>')
 def get_objects(image_filename):
     base_filename = os.path.splitext(image_filename)[0]
-    static_base = os.path.dirname(os.path.abspath(__file__)) if os.environ.get("VERCEL") else BASE_DIR
-    objects_path = os.path.join(static_base, "static", "objects", f"{base_filename}_objects.json")
+    objects_path = os.path.join(BASE_DIR, "static", "objects", f"{base_filename}_objects.json")
     
     if os.path.exists(objects_path):
         with open(objects_path, 'r') as f:
@@ -1018,7 +1014,7 @@ def export_objects():
         if not image_filename or not objects:
             return jsonify({"error": "Missing required fields"}), 400
         
-        # Create export directory if it doesn't exist (use /tmp on Vercel)
+        # Create export directory if it doesn't exist
         export_dir = os.path.join(BASE_DIR, "exports")
         os.makedirs(export_dir, exist_ok=True)
         

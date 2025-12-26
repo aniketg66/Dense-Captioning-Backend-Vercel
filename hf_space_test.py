@@ -26,13 +26,17 @@ except Exception as e:
 
 
 def main():
-    # Defaults; can be overridden by env
+    # Get Space URL and token from environment variables
     default_space = "https://aniketg6-medsam-inference.hf.space"
     space_url = os.getenv("HF_SPACE_URL", default_space)
-    # Get token from environment - no hardcoded fallback for security
+    
+    # Token must be provided via environment variable (no hardcoded fallback)
     hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
-    print(f"HF_TOKEN: {hf_token}")
-    # hf_token
+    
+    if not hf_token:
+        print("ERROR: HF_TOKEN or HUGGINGFACE_TOKEN environment variable is required")
+        print("Usage: HF_TOKEN='your_token' python hf_space_test.py")
+        sys.exit(1)
 
     print(f"Space URL: {space_url}")
     print(f"HF_TOKEN length: {len(hf_token) if hf_token else 0}")
