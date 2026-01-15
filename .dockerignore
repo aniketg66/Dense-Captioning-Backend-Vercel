@@ -1,48 +1,55 @@
-.git
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
 *.so
 .Python
+*.egg-info/
+dist/
+build/
 venv/
 env/
 ENV/
+.venv
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
-Thumbs.db
 
-# Large model/checkpoint files
-*.pth
-*.pt
-*.ckpt
-*.h5
-*.pb
-*.onnx
-*.pkl
-*.joblib
-models/
-legend_match_swin/
-medsam python/
-medsam-inference/
-huggingface_space/
+# Logs
+*.log
 
-# Local data and cache
+# Temporary files
 uploads/
 transcriptions/
-static/masks/
-static/objects/
 processed_images.json
+*.tmp
 
-# Tests and docs not needed in image
-test_*.py
-*_test.py
+# Model files (large)
+*.pth
+*.pkl
+*.ckpt
+*.h5
+
+# Git
+.git/
+.gitignore
+
+# Documentation
 *.md
 !README.md
 
-# Build artifacts
-build/
-dist/
-*.egg-info/
+# Test files
+test_*.py
+*_test.py
 
+# OS
+Thumbs.db

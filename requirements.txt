@@ -7,7 +7,6 @@ Pillow>=10.2.0,<11.0.0
 numpy==1.26.4
 openai-whisper>=20240927
 pydub==0.25.1
-audioop-lts>=0.2.0; python_version >= '3.13'
 opencv-python-headless==4.8.0.76
 scikit-image>=0.22.0
 scipy>=1.12.0
@@ -15,6 +14,8 @@ easyocr==1.7.0
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.6.0
 torchvision>=0.21.0
+# Pin tokenizers to avoid Rust build issues on Render
+tokenizers>=0.14.0,<0.15.0
 transformers==4.35.0
 supabase==2.3.4
 aiohttp==3.9.1
