@@ -4,10 +4,11 @@
 FROM python:3.12-slim
 
 # Install system dependencies
+# Note: On Debian "trixie", libgl1-mesa-glx is obsolete; use libgl1 instead
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     poppler-utils \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
