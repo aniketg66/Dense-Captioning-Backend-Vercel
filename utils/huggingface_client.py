@@ -54,6 +54,18 @@ class HuggingFaceSegmentationClient:
                 
                 self._initialized = True
                 print("✓ Connected to HuggingFace Space successfully!")
+            except json.JSONDecodeError as je:
+                # Handle JSON decode errors (empty response, HTML error page, etc.)
+                print(f"Failed to connect to HuggingFace Space: JSON decode error")
+                print(f"Error: {je}")
+                print(f"This usually means:")
+                print(f"  1. The Space is down or not responding")
+                print(f"  2. The Space returned an HTML error page instead of JSON")
+                print(f"  3. Network connectivity issues from Render")
+                print(f"  4. The Space URL is incorrect: {self.space_url}")
+                print(f"💡 Tip: Check if the Space is running at https://huggingface.co/spaces/{self.space_url}")
+                self.client = None
+                raise
             except Exception as e:
                 # Enhanced debug to see non-JSON errors
                 print(f"Failed to connect to HuggingFace Space: {e}")
@@ -70,6 +82,7 @@ class HuggingFaceSegmentationClient:
                     except Exception as dbg_err:
                         print(f"(debug printing response failed: {dbg_err})")
                 print("💡 Tip: If authentication failed, check your HF_TOKEN environment variable")
+                self.client = None
                 raise
         return self.client
     

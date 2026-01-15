@@ -124,6 +124,13 @@ if GRADIO_CLIENT_AVAILABLE and USE_HF_FOR_MASKS:
         except Exception as e:
             logger.warning(f"Could not check HuggingFace auto mask status: {e}")
             
+    except json.JSONDecodeError as je:
+        logger.warning(f"Could not connect to HuggingFace Space: JSON decode error")
+        logger.warning(f"Error: {je}")
+        logger.warning(f"This usually means the Space is down, returned HTML instead of JSON, or has network issues")
+        logger.warning(f"Space URL: {MEDSAM_HF_SPACE}")
+        logger.warning(f"💡 Check if the Space is running at https://huggingface.co/spaces/{MEDSAM_HF_SPACE}")
+        hf_mask_client = None
     except Exception as e:
         logger.warning(f"Could not connect to HuggingFace Space: {e}")
         logger.warning(f"Error details: {type(e).__name__}: {str(e)}")
@@ -373,8 +380,8 @@ def call_hf_space_api(image_path):
     
     try:
         # Check if gradio_client is available
-        try:
-            from gradio_client import Client, handle_file
+    try:
+        from gradio_client import Client, handle_file
         except ImportError:
             logger.error("gradio_client not available - cannot call HF Space API")
             return None
@@ -390,7 +397,7 @@ def call_hf_space_api(image_path):
             if hf_token:
                 client = Client("https://hanszhu-dense-captioning-platform.hf.space", hf_token=hf_token)
             else:
-                client = Client("https://hanszhu-dense-captioning-platform.hf.space")
+        client = Client("https://hanszhu-dense-captioning-platform.hf.space")
         except (TypeError, ValueError) as te:
             error_msg = str(te).lower()
             if "proxy" in error_msg or "unexpected keyword" in error_msg:
