@@ -229,9 +229,10 @@ def call_hf_space_api(image_path):
     Call the Dense Captioning Platform API using gradio_client to analyze a scientific image
     Returns the raw API response
     """
-    # Proxy vars are permanently removed at module level, Client should be monkey-patched
-    # But apply defensive patch if Client is imported fresh here
+    # Proxy vars are permanently removed at module level
+    # Client should be monkey-patched at gradio_client module level
     try:
+        import gradio_client
         from gradio_client import Client
         try:
             from gradio_client import handle_file
@@ -240,38 +241,62 @@ def call_hf_space_api(image_path):
             def handle_file(file_path):
                 return file_path
         
-        # Apply monkey-patch defensively if not already patched
-        if not hasattr(Client.__init__, '_proxy_patched'):
-            _original_client_init = Client.__init__
+        # Ensure monkey-patch is applied at module level
+        if not hasattr(gradio_client.Client.__init__, '_proxy_patched'):
+            print("🔧 [app.py] Applying monkey-patch to gradio_client.Client.__init__")
+            _original_client_init = gradio_client.Client.__init__
             def _patched_client_init(self, *args, **kwargs):
+                if 'proxy' in kwargs or 'proxies' in kwargs:
+                    print(f"⚠️  [app.py] Proxy kwargs detected: proxy={kwargs.get('proxy')}, proxies={kwargs.get('proxies')}")
                 kwargs.pop('proxy', None)
                 kwargs.pop('proxies', None)
-                return _original_client_init(self, *args, **kwargs)
-            Client.__init__ = _patched_client_init
-            Client.__init__._proxy_patched = True
+                try:
+                    return _original_client_init(self, *args, **kwargs)
+                except TypeError as e:
+                    if 'proxy' in str(e).lower() or 'unexpected keyword' in str(e).lower():
+                        print(f"❌ [app.py] Proxy error still occurred: {e}")
+                        raise
+                    raise
+            gradio_client.Client.__init__ = _patched_client_init
+            gradio_client.Client.__init__._proxy_patched = True
+            Client.__init__ = gradio_client.Client.__init__
+            print("✅ [app.py] Monkey-patch applied")
+        else:
+            # Use the already-patched version
+            Client.__init__ = gradio_client.Client.__init__
+            print("✓ [app.py] Using already-patched Client")
         
-        print(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
+        print(f"🔍 [app.py] About to create Client for {HF_SPACE_URL}")
+        print(f"🔍 [app.py] Client.__init__ patched: {hasattr(Client.__init__, '_proxy_patched')}")
         
         # Get HuggingFace token from environment variable
         hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
         
-        # Initialize client - monkey-patch already applied, proxy vars already removed
+        # Initialize client - monkey-patch already applied at module level
         try:
             if hf_token:
+                print("🔍 [app.py] Creating Client with token")
                 client = Client("https://hanszhu-dense-captioning-platform.hf.space", hf_token=hf_token)
             else:
+                print("🔍 [app.py] Creating Client without token")
                 client = Client("https://hanszhu-dense-captioning-platform.hf.space")
-        except (TypeError, ValueError) as te:
+            print("✅ [app.py] Client created successfully!")
+        except TypeError as te:
             error_msg = str(te).lower()
             if "proxy" in error_msg or "unexpected keyword" in error_msg:
-                print(f"Client initialization failed with proxy error: {te}")
+                print(f"❌ [app.py] Client initialization failed with proxy error: {te}")
+                print(f"❌ [app.py] Error type: {type(te).__name__}")
+                print(f"❌ [app.py] Client.__init__ patched: {hasattr(Client.__init__, '_proxy_patched')}")
                 print("gradio-client 0.7.0 doesn't support proxy parameter")
+                import traceback
+                print(f"Full traceback: {traceback.format_exc()}")
                 return None
             else:
                 raise
         
         # Call the predict function using the working approach
         try:
+            # Use keyword arguments as shown in working sample
             result = client.predict(
                 image=handle_file(image_path),
                 fn_index=0

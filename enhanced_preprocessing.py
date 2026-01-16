@@ -10,9 +10,52 @@ import base64
 from urllib.parse import urlparse
 from skimage import transform
 from PIL import Image
-from supabase import create_client, Client
 import logging
 from dotenv import load_dotenv
+
+# CRITICAL: Patch httpx.Client BEFORE importing supabase
+# Supabase uses gotrue which uses httpx, and httpx doesn't support proxy parameter
+# in the version being used, causing: TypeError: Client.__init__() got an unexpected keyword argument 'proxy'
+def _patch_httpx_for_supabase():
+    """Patch httpx.Client to remove proxy parameter before Supabase imports it"""
+    try:
+        import httpx
+        if hasattr(httpx.Client.__init__, '_httpx_proxy_patched'):
+            return  # Already patched
+        
+        _original_httpx_init = httpx.Client.__init__
+        def _patched_httpx_init(self, *args, **kwargs):
+            # Remove proxy parameter - httpx version might not support it
+            if 'proxy' in kwargs or 'proxies' in kwargs:
+                print(f"⚠️  [httpx-patch] Removing proxy kwargs: {list(kwargs.keys())}")
+            kwargs.pop('proxy', None)
+            kwargs.pop('proxies', None)
+            try:
+                return _original_httpx_init(self, *args, **kwargs)
+            except TypeError as e:
+                if 'proxy' in str(e).lower():
+                    # Try again without any proxy-related kwargs
+                    for key in list(kwargs.keys()):
+                        if 'proxy' in key.lower():
+                            kwargs.pop(key, None)
+                    return _original_httpx_init(self, *args, **kwargs)
+                raise
+        
+        httpx.Client.__init__ = _patched_httpx_init
+        httpx.Client.__init__._httpx_proxy_patched = True
+        print("✅ [enhanced_preprocessing] httpx.Client patched before Supabase import")
+    except (ImportError, AttributeError):
+        # httpx not imported yet, will try again after supabase import
+        pass
+
+# Apply httpx patch BEFORE importing supabase
+_patch_httpx_for_supabase()
+
+# Now import supabase (which will import httpx, and our patch will be active)
+from supabase import create_client, Client
+
+# Apply patch again after supabase import (defensive)
+_patch_httpx_for_supabase()
 
 # Load environment variables
 load_dotenv()
@@ -31,6 +74,7 @@ for var in _proxy_vars_to_remove:
         del os.environ[var]  # Permanently remove, don't restore (Render doesn't need them)
 
 try:
+    import gradio_client
     from gradio_client import Client as GradioClient
     try:
         from gradio_client import handle_file
@@ -39,19 +83,76 @@ try:
         def handle_file(file_path):
             return file_path
     
-    # Monkey-patch Client.__init__ at module level to prevent proxy parameter errors
-    # This must be done right after import, before any Client instances are created
-    _original_gradio_client_init = GradioClient.__init__
-    def _patched_gradio_client_init(self, *args, **kwargs):
-        # Remove proxy-related kwargs that gradio-client 0.7.0 doesn't support
-        kwargs.pop('proxy', None)
-        kwargs.pop('proxies', None)
-        # Call original init without proxy kwargs
-        return _original_gradio_client_init(self, *args, **kwargs)
-    GradioClient.__init__ = _patched_gradio_client_init
+    # CRITICAL: Monkey-patch at the gradio_client MODULE level, not just our import
+    # This ensures ALL imports of Client get the patched version
+    # Also patch __new__ in case Client uses it for construction
+    if not hasattr(gradio_client.Client.__init__, '_proxy_patched'):
+        logger.info("🔧 Applying monkey-patch to gradio_client.Client.__init__")
+        _original_gradio_client_init = gradio_client.Client.__init__
+        
+        def _patched_gradio_client_init(self, *args, **kwargs):
+            # DEBUG: Log ALL kwargs to see what's being passed
+            logger.info(f"🔍 [PATCH] Client.__init__ called with args={len(args)}, kwargs={list(kwargs.keys())}")
+            
+            # Remove ALL proxy-related kwargs that gradio-client 0.7.0 doesn't support
+            proxy_keys_removed = []
+            for key in list(kwargs.keys()):
+                if 'proxy' in key.lower():
+                    proxy_keys_removed.append(key)
+                    logger.warning(f"⚠️  [PATCH] Removing proxy kwarg: {key}={kwargs[key]}")
+                    kwargs.pop(key, None)
+            
+            if proxy_keys_removed:
+                logger.warning(f"⚠️  [PATCH] Removed {len(proxy_keys_removed)} proxy-related kwargs: {proxy_keys_removed}")
+            
+            # Call original init without proxy kwargs
+            try:
+                logger.info(f"🔍 [PATCH] Calling original __init__ with kwargs: {list(kwargs.keys())}")
+                result = _original_gradio_client_init(self, *args, **kwargs)
+                logger.info(f"✅ [PATCH] Original __init__ succeeded")
+                return result
+            except TypeError as e:
+                error_str = str(e).lower()
+                if 'proxy' in error_str or 'unexpected keyword' in error_str:
+                    logger.error(f"❌ [PATCH] Proxy error still occurred: {e}")
+                    logger.error(f"   Args count: {len(args)}, Args: {args[:2] if args else 'None'}")
+                    logger.error(f"   Kwargs keys: {list(kwargs.keys())}")
+                    logger.error(f"   Kwargs: {kwargs}")
+                    # Try one more time with all proxy-related keys removed
+                    for key in list(kwargs.keys()):
+                        if 'proxy' in key.lower():
+                            logger.warning(f"   [PATCH] Removing additional proxy key: {key}")
+                            kwargs.pop(key, None)
+                    try:
+                        logger.info(f"   [PATCH] Retrying with cleaned kwargs: {list(kwargs.keys())}")
+                        return _original_gradio_client_init(self, *args, **kwargs)
+                    except Exception as e2:
+                        logger.error(f"❌ [PATCH] Still failing after removing all proxy keys: {e2}")
+                        logger.error(f"   Final kwargs: {kwargs}")
+                        raise
+                else:
+                    logger.error(f"❌ [PATCH] TypeError (not proxy-related): {e}")
+                    raise
+            except Exception as e:
+                logger.error(f"❌ [PATCH] Unexpected error in patched __init__: {e}")
+                raise
+        
+        # Patch __init__
+        gradio_client.Client.__init__ = _patched_gradio_client_init
+        gradio_client.Client.__init__._proxy_patched = True
+        
+        # Don't patch __new__ - it causes issues with object.__new__()
+        # The __init__ patch is sufficient to handle proxy kwargs
+        
+        logger.info("✅ Monkey-patch applied successfully to gradio_client.Client")
+    else:
+        logger.debug("✓ gradio_client.Client already patched")
+    
+    # Also patch our imported reference
+    GradioClient.__init__ = gradio_client.Client.__init__
     
     GRADIO_CLIENT_AVAILABLE = True
-    logger.debug("gradio_client imported successfully and monkey-patched")
+    logger.info("✅ gradio_client imported successfully and monkey-patched at module level")
 except ImportError as e:
     logger.warning(f"gradio_client not installed. Install with: pip install gradio-client")
     logger.warning(f"Import error details: {e}")
@@ -173,6 +274,7 @@ def generate_masks_via_huggingface(image_path: str) -> list:
         params = {"max_masks": -1, "resize_longest": 512}
 
         start = time.perf_counter()
+        # Use keyword arguments as shown in working sample
         result = hf_mask_client.predict(
             image=handle_file(image_path),
             request_json=json.dumps(params),
@@ -239,6 +341,7 @@ def generate_embedding_via_huggingface(image_path: str, image_id: str) -> bool:
         params = {"image_id": image_id}
 
         start = time.perf_counter()
+        # Use keyword arguments as shown in user's working sample
         result = hf_mask_client.predict(
             image=handle_file(image_path),
             request_json=json.dumps(params),
@@ -381,44 +484,103 @@ def call_hf_space_api(image_path):
     # No need to remove them again or patch again
     try:
         # Check if gradio_client is available
-        try:
-            from gradio_client import Client, handle_file
-            # Apply monkey-patch if not already applied (defensive)
-            if not hasattr(Client.__init__, '_proxy_patched'):
-                _original_client_init = Client.__init__
-                def _patched_client_init(self, *args, **kwargs):
-                    kwargs.pop('proxy', None)
-                    kwargs.pop('proxies', None)
-                    return _original_client_init(self, *args, **kwargs)
-                Client.__init__ = _patched_client_init
-                Client.__init__._proxy_patched = True
-        except ImportError:
+        if not GRADIO_CLIENT_AVAILABLE:
             logger.error("gradio_client not available - cannot call HF Space API")
             return None
         
-        logger.info(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
+        # CRITICAL: Import from the already-patched module, don't do fresh import
+        # Use the GradioClient that was imported and patched at module level
+        if not GRADIO_CLIENT_AVAILABLE or GradioClient is None:
+            logger.error("gradio_client not available - cannot call HF Space API")
+            return None
+        
+        # Ensure we're using the patched version from the module
+        import gradio_client
+        # Re-apply patch if needed (defensive)
+        if not hasattr(gradio_client.Client.__init__, '_proxy_patched'):
+            logger.warning("⚠️  Client not patched, applying patch now")
+            _original_init = gradio_client.Client.__init__
+            def _patched_init(self, *args, **kwargs):
+                if 'proxy' in kwargs or 'proxies' in kwargs:
+                    logger.warning(f"⚠️  Proxy kwargs detected: {list(kwargs.keys())}")
+                kwargs.pop('proxy', None)
+                kwargs.pop('proxies', None)
+                return _original_init(self, *args, **kwargs)
+            gradio_client.Client.__init__ = _patched_init
+            gradio_client.Client.__init__._proxy_patched = True
+        
+        # Use the patched Client from the module
+        Client = gradio_client.Client
+        
+        # Import handle_file
+        try:
+            from gradio_client import handle_file
+        except ImportError:
+            def handle_file(file_path):
+                return file_path
+        
+        logger.info(f"🔍 DEBUG: About to create Client for {HF_SPACE_URL}")
+        logger.info(f"🔍 DEBUG: Using gradio_client.Client (patched: {hasattr(Client.__init__, '_proxy_patched')})")
         
         # Get HuggingFace token from environment variable
         hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
         
-        # Initialize client - monkey-patch already applied, proxy vars already removed
+        # Initialize client - use the patched Client from gradio_client module
+        logger.info(f"🔍 DEBUG: Creating Client with token: {'Yes' if hf_token else 'No'}")
+        logger.info(f"🔍 DEBUG: Client class: {Client}")
+        logger.info(f"🔍 DEBUG: Client.__init__: {Client.__init__}")
+        logger.info(f"🔍 DEBUG: Client.__init__ patched flag: {hasattr(Client.__init__, '_proxy_patched')}")
+        
+        # Prepare kwargs explicitly to ensure no proxy is passed
+        client_kwargs = {}
+        if hf_token:
+            client_kwargs['hf_token'] = hf_token
+        
+        logger.info(f"🔍 DEBUG: About to call Client with kwargs: {list(client_kwargs.keys())}")
         try:
-            if hf_token:
-                client = Client("https://hanszhu-dense-captioning-platform.hf.space", hf_token=hf_token)
-            else:
-                client = Client("https://hanszhu-dense-captioning-platform.hf.space")
-        except (TypeError, ValueError) as te:
+            # Call Client.__init__ directly through the patched method
+            # This ensures our patch is definitely used
+            logger.info("🔍 DEBUG: Instantiating Client...")
+            client = Client("https://hanszhu-dense-captioning-platform.hf.space", **client_kwargs)
+            logger.info("✅ Client created successfully!")
+        except TypeError as te:
             error_msg = str(te).lower()
             if "proxy" in error_msg or "unexpected keyword" in error_msg:
-                logger.error(f"Client initialization failed with proxy error: {te}")
+                logger.error(f"❌ Client initialization failed with proxy error: {te}")
+                logger.error(f"❌ Error type: {type(te).__name__}")
+                logger.error(f"❌ Client.__init__ patched: {hasattr(Client.__init__, '_proxy_patched')}")
+                logger.error(f"❌ Client class module: {Client.__module__}")
+                logger.error(f"❌ Client class: {Client}")
+                # Try to inspect what's actually being called
+                import inspect
+                try:
+                    sig = inspect.signature(Client.__init__)
+                    logger.error(f"❌ Client.__init__ signature: {sig}")
+                except:
+                    pass
                 logger.error("gradio-client 0.7.0 doesn't support proxy parameter")
                 logger.error("Skipping HF Space API call - this is a gradio-client version limitation")
+                import traceback
+                logger.error(f"Full traceback: {traceback.format_exc()}")
                 return None
             else:
                 raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error creating Client: {e}")
+            logger.error(f"❌ Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error creating Client: {e}")
+            logger.error(f"❌ Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            raise
         
         # Call the predict function using the working approach
         try:
+            # Use keyword arguments as shown in working sample
             result = client.predict(
                 image=handle_file(image_path),
                 fn_index=0
@@ -790,7 +952,41 @@ def download_image(storage_link: str, bucket: str = IMAGE_BUCKET, expires_sec: i
     # 2) get signed URL
     logger.info(f"Getting signed URL for: {bucket}/{internal_path}")
     signed = supabase.storage.from_(bucket).create_signed_url(internal_path, expires_sec)
-    signed_url = signed["signedUrl"]
+    
+    # Handle different response formats from Supabase
+    # Supabase Python client returns: {"signedURL": "..."} (uppercase URL)
+    # But some versions might use different formats, so try all possibilities
+    if isinstance(signed, dict):
+        # Try different possible key names (Supabase Python client might use different formats)
+        signed_url = (
+            signed.get("signedURL") or  # Uppercase (used in utils/supabase_client.py line 118)
+            signed.get("signedUrl") or  # CamelCase
+            signed.get("signed_url") or  # Snake_case
+            signed.get("url") or  # Generic
+            signed.get("href")  # Alternative
+        )
+        if not signed_url:
+            logger.error(f"❌ Unexpected signed URL response format: {signed}")
+            logger.error(f"   Response keys: {list(signed.keys())}")
+            logger.error(f"   Response type: {type(signed)}")
+            # Try to get the first string value if it's a dict
+            for key, value in signed.items():
+                if isinstance(value, str) and value.startswith('http'):
+                    signed_url = value
+                    logger.warning(f"   Found URL-like value in key '{key}': {signed_url[:50]}...")
+                    break
+            if not signed_url:
+                raise ValueError(f"Could not extract signed URL from response. Keys: {list(signed.keys())}, Response: {signed}")
+    elif isinstance(signed, str):
+        signed_url = signed
+    else:
+        logger.error(f"❌ Unexpected signed URL response type: {type(signed)}, value: {signed}")
+        raise ValueError(f"Unexpected signed URL response type: {type(signed)}")
+    
+    if not signed_url:
+        raise ValueError("signed_url is empty or None")
+    
+    logger.debug(f"✓ Got signed URL: {signed_url[:50]}...")
 
     # 3) fetch bytes
     r = requests.get(signed_url)
