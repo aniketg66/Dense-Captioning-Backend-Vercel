@@ -380,8 +380,8 @@ def call_hf_space_api(image_path):
     
     try:
         # Check if gradio_client is available
-    try:
-        from gradio_client import Client, handle_file
+        try:
+            from gradio_client import Client, handle_file
         except ImportError:
             logger.error("gradio_client not available - cannot call HF Space API")
             return None
@@ -397,7 +397,7 @@ def call_hf_space_api(image_path):
             if hf_token:
                 client = Client("https://hanszhu-dense-captioning-platform.hf.space", hf_token=hf_token)
             else:
-        client = Client("https://hanszhu-dense-captioning-platform.hf.space")
+                client = Client("https://hanszhu-dense-captioning-platform.hf.space")
         except (TypeError, ValueError) as te:
             error_msg = str(te).lower()
             if "proxy" in error_msg or "unexpected keyword" in error_msg:

@@ -65,7 +65,36 @@ class SupabaseManager:
         # Proxy vars are permanently removed at module level (see top of file)
         # httpx is monkey-patched to ignore proxy parameter
         # This ensures supabase client works on Railway without proxy errors
-        self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        
+        # Validate config values before creating client
+        if not SUPABASE_URL:
+            raise ValueError(
+                "SUPABASE_URL is not set. "
+                "Set SUPABASE_URL or REACT_APP_SUPABASE_URL environment variable."
+            )
+        if not SUPABASE_KEY:
+            raise ValueError(
+                "SUPABASE_KEY is not set. "
+                "Set SUPABASE_KEY, REACT_APP_SUPABASE_ANON_KEY, or SUPABASE_ANON_KEY environment variable."
+            )
+        if not SUPABASE_URL.startswith("http"):
+            raise ValueError(
+                f"Invalid SUPABASE_URL format: {SUPABASE_URL}. "
+                "URL must start with http:// or https://"
+            )
+        
+        try:
+            self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception as e:
+            error_msg = str(e)
+            if "Invalid URL" in error_msg or "invalid" in error_msg.lower():
+                raise ValueError(
+                    f"Failed to create Supabase client: {error_msg}\n"
+                    f"SUPABASE_URL: {SUPABASE_URL[:50]}... (length: {len(SUPABASE_URL)})\n"
+                    f"SUPABASE_KEY: {'*' * min(20, len(SUPABASE_KEY))}... (length: {len(SUPABASE_KEY) if SUPABASE_KEY else 0})\n"
+                    f"Please check your environment variables are set correctly on Render."
+                ) from e
+            raise
     
     def get_image_data(self, image_id: str) -> Dict[str, Any]:
         """Fetch image data from the images table"""

@@ -1275,11 +1275,23 @@ def medsam_load_from_supabase():
             print(f"Returning fallback response: {fallback_response}")
             return jsonify(fallback_response)
         
-    except Exception as e:
-        print(f"Error loading from Supabase: {str(e)}")
+    except ValueError as ve:
+        # Configuration errors (missing env vars, invalid URLs, etc.)
+        error_msg = str(ve)
+        print(f"Configuration error loading from Supabase: {error_msg}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f'Failed to load from Supabase: {str(e)}'}), 500
+        return jsonify({
+            'error': f'Configuration error: {error_msg}',
+            'hint': 'Check that SUPABASE_URL and SUPABASE_KEY are set in Render environment variables'
+        }), 500
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error loading from Supabase: {error_msg}")
+        print(f"Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to load from Supabase: {error_msg}'}), 500
 
 # Global cache for masks to avoid reloading
 masks_cache = {}

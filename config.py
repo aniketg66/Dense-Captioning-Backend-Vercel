@@ -5,18 +5,22 @@ import os
 # Support multiple env var names for flexibility
 
 # Supabase URL - can have fallback to default (not sensitive)
-SUPABASE_URL = (
+# Strip whitespace in case env var has leading/trailing spaces
+_supabase_url_raw = (
     os.getenv("SUPABASE_URL") or 
     os.getenv("REACT_APP_SUPABASE_URL") or 
     "https://ayiwlxmvainywvpxxckn.supabase.co"
 )
+SUPABASE_URL = _supabase_url_raw.strip() if _supabase_url_raw else None
 
 # Supabase Key - MUST come from environment (sensitive, no fallback)
-SUPABASE_KEY = (
+# Strip whitespace in case env var has leading/trailing spaces
+_supabase_key_raw = (
     os.getenv("SUPABASE_KEY") or 
     os.getenv("REACT_APP_SUPABASE_ANON_KEY") or 
     os.getenv("SUPABASE_ANON_KEY")
 )
+SUPABASE_KEY = _supabase_key_raw.strip() if _supabase_key_raw else None
 
 # Validate that we have valid values
 if not SUPABASE_URL or not SUPABASE_URL.startswith("http"):

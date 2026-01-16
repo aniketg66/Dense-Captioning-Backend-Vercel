@@ -122,10 +122,10 @@ class MedSAMSpacePredictor:
                 # Handle non-200 responses
                 if response.status_code == 503:
                     # Space is sleeping/loading
-                            if attempt < self.max_retries - 1:
+                    if attempt < self.max_retries - 1:
                         print(f"⏳ Space is loading (attempt {attempt + 1}/{self.max_retries}), waiting {self.retry_delay}s...")
-                                time.sleep(self.retry_delay)
-                                continue
+                        time.sleep(self.retry_delay)
+                        continue
                     else:
                         raise Exception("Space is not available after multiple retries")
                 
