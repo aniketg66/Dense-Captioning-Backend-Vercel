@@ -7,6 +7,13 @@ import tempfile
 import os
 import numpy as np
 from PIL import Image
+# Permanently remove proxy env vars for Render (not needed, causes errors)
+# gradio-client 0.7.0 reads these but doesn't support proxy parameter
+_proxy_vars_to_remove = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
+for var in _proxy_vars_to_remove:
+    if var in os.environ:
+        del os.environ[var]  # Permanently remove (Render doesn't need them)
+
 try:
     from gradio_client import Client
     try:
@@ -16,6 +23,17 @@ try:
         # We'll use the file path directly
         def handle_file(file_path):
             return file_path
+    
+    # Monkey-patch Client.__init__ at module level to prevent proxy parameter errors
+    # This must be done right after import, before any Client instances are created
+    _original_client_init = Client.__init__
+    def _patched_client_init(self, *args, **kwargs):
+        # Remove proxy-related kwargs that gradio-client 0.7.0 doesn't support
+        kwargs.pop('proxy', None)
+        kwargs.pop('proxies', None)
+        # Call original init without proxy kwargs
+        return _original_client_init(self, *args, **kwargs)
+    Client.__init__ = _patched_client_init
 except ImportError:
     Client = None
     handle_file = None

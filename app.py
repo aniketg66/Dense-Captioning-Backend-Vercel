@@ -44,6 +44,13 @@ from pdf_extractor import extract_images_from_pdf
 # Load environment variables from backend directory .env
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
+# Permanently remove proxy env vars for Render (not needed, causes errors with gradio-client)
+# gradio-client 0.7.0 reads these but doesn't support proxy parameter
+_proxy_vars_to_remove = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
+for var in _proxy_vars_to_remove:
+    if var in os.environ:
+        del os.environ[var]  # Permanently remove (Render doesn't need them)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -222,14 +229,8 @@ def call_hf_space_api(image_path):
     Call the Dense Captioning Platform API using gradio_client to analyze a scientific image
     Returns the raw API response
     """
-    # IMPORTANT: Remove proxy env vars BEFORE importing/initializing Client
-    # gradio-client 0.7.0 reads these but doesn't support proxy parameter
-    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
-    saved_proxy_vars = {}
-    for var in proxy_vars:
-        if var in os.environ:
-            saved_proxy_vars[var] = os.environ.pop(var)
-    
+    # Proxy vars are permanently removed at module level, Client should be monkey-patched
+    # But apply defensive patch if Client is imported fresh here
     try:
         from gradio_client import Client
         try:
@@ -239,13 +240,22 @@ def call_hf_space_api(image_path):
             def handle_file(file_path):
                 return file_path
         
+        # Apply monkey-patch defensively if not already patched
+        if not hasattr(Client.__init__, '_proxy_patched'):
+            _original_client_init = Client.__init__
+            def _patched_client_init(self, *args, **kwargs):
+                kwargs.pop('proxy', None)
+                kwargs.pop('proxies', None)
+                return _original_client_init(self, *args, **kwargs)
+            Client.__init__ = _patched_client_init
+            Client.__init__._proxy_patched = True
+        
         print(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
         
         # Get HuggingFace token from environment variable
         hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
         
-        # Initialize client with direct URL (working approach)
-        # Proxy env vars already removed above
+        # Initialize client - monkey-patch already applied, proxy vars already removed
         try:
             if hf_token:
                 client = Client("https://hanszhu-dense-captioning-platform.hf.space", hf_token=hf_token)
@@ -278,10 +288,7 @@ def call_hf_space_api(image_path):
         import traceback
         print(f"Full traceback: {traceback.format_exc()}")
         return None
-    finally:
-        # Always restore proxy environment variables
-        for var, value in saved_proxy_vars.items():
-            os.environ[var] = value
+    # No finally block - proxy vars are permanently removed (Render doesn't need them)
 
 def parse_hf_space_response(hf_response):
     """
