@@ -1,6 +1,25 @@
 import sys
 import os
 import re
+import ssl
+import urllib.request
+
+# Patch urllib to fix SSL certificate verification issues (local dev on macOS)
+# This is needed for whisper.load_model() which downloads models via urllib
+_original_urlopen = urllib.request.urlopen
+
+def _patched_urlopen(*args, **kwargs):
+    """Patch urlopen to disable SSL verification for local development"""
+    # Create unverified SSL context for local development (macOS SSL cert issue)
+    if 'context' not in kwargs:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        kwargs['context'] = ssl_context
+    return _original_urlopen(*args, **kwargs)
+
+urllib.request.urlopen = _patched_urlopen
+print("✅ [app.py] Patched urllib.request.urlopen to fix SSL verification for Whisper model downloads")
 
 # Add mmcv to Python path (only if it exists, for local development)
 mmcv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'mmcv'))
