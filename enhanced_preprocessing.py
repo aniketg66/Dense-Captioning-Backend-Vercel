@@ -31,11 +31,21 @@ for var in _proxy_vars_to_remove:
         _proxy_vars_backup[var] = os.environ.pop(var)
 
 try:
-    from gradio_client import Client as GradioClient, handle_file
+    from gradio_client import Client as GradioClient
+    try:
+        from gradio_client import handle_file
+    except ImportError:
+        # handle_file might not exist in older versions, define a fallback
+        def handle_file(file_path):
+            return file_path
     GRADIO_CLIENT_AVAILABLE = True
-except ImportError:
-    logger.warning("gradio_client not installed. Install with: pip install gradio_client")
+    logger.debug("gradio_client imported successfully")
+except ImportError as e:
+    logger.warning(f"gradio_client not installed. Install with: pip install gradio-client")
+    logger.warning(f"Import error details: {e}")
     GRADIO_CLIENT_AVAILABLE = False
+    GradioClient = None
+    handle_file = None
 finally:
     # Restore proxy vars after import check
     for var, value in _proxy_vars_backup.items():
@@ -83,16 +93,32 @@ USE_HF_FOR_MASKS = os.getenv("USE_HF_FOR_MASKS", "true").lower() == "true"
 if GRADIO_CLIENT_AVAILABLE and USE_HF_FOR_MASKS:
     # IMPORTANT: Remove proxy env vars BEFORE initializing Client
     # gradio-client 0.7.0 reads these but doesn't support proxy parameter
-    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
     saved_proxy_vars_init = {}
     for var in proxy_vars:
         if var in os.environ:
             saved_proxy_vars_init[var] = os.environ.pop(var)
     
     try:
+        # Monkey-patch GradioClient.__init__ to remove proxy parameter if present
+        original_gradio_init = GradioClient.__init__
+        def patched_gradio_init(self, *args, **kwargs):
+            # Remove proxy-related kwargs that gradio-client 0.7.0 doesn't support
+            kwargs.pop('proxy', None)
+            kwargs.pop('proxies', None)
+            # Call original init
+            return original_gradio_init(self, *args, **kwargs)
+        GradioClient.__init__ = patched_gradio_init
+        
         logger.info(f"Connecting to HuggingFace Space: {MEDSAM_HF_SPACE}")
         # Get HuggingFace token from environment variable
         hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
+        
+        # Double-check proxy vars are still removed right before Client creation
+        for var in proxy_vars:
+            if var in os.environ:
+                logger.warning(f"Proxy var {var} still present, removing again")
+                saved_proxy_vars_init[var] = os.environ.pop(var)
         
         # Initialize client - proxy env vars already removed above
         try:
@@ -371,7 +397,7 @@ def call_hf_space_api(image_path):
     """
     # IMPORTANT: Remove proxy env vars BEFORE importing gradio_client
     # gradio-client 0.7.0 reads these but doesn't support proxy parameter
-    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+    proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
     saved_proxy_vars = {}
     for var in proxy_vars:
         if var in os.environ:
@@ -386,10 +412,27 @@ def call_hf_space_api(image_path):
             logger.error("gradio_client not available - cannot call HF Space API")
             return None
         
+        # Monkey-patch Client.__init__ to remove proxy parameter if present
+        # This prevents "unexpected keyword argument 'proxy'" errors
+        original_init = Client.__init__
+        def patched_init(self, *args, **kwargs):
+            # Remove proxy-related kwargs that gradio-client 0.7.0 doesn't support
+            kwargs.pop('proxy', None)
+            kwargs.pop('proxies', None)
+            # Call original init
+            return original_init(self, *args, **kwargs)
+        Client.__init__ = patched_init
+        
         logger.info(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
         
         # Get HuggingFace token from environment variable
         hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
+        
+        # Double-check proxy vars are still removed right before Client creation
+        for var in proxy_vars:
+            if var in os.environ:
+                logger.warning(f"Proxy var {var} still present, removing again")
+                saved_proxy_vars[var] = os.environ.pop(var)
         
         # Initialize client with direct URL
         # gradio-client 0.7.0 doesn't support proxy parameter, so we removed proxy env vars above
