@@ -1460,6 +1460,54 @@ def medsam_get_mask_image():
         traceback.print_exc()
         return jsonify({'error': f'Failed to get mask image: {str(e)}'}), 500
 
+@app.route('/api/medsam/get_mask_signed_urls', methods=['POST', 'OPTIONS'])
+def medsam_get_mask_signed_urls():
+    """Batch generate signed URLs for mask images stored in Supabase"""
+    try:
+        data = request.get_json()
+        mask_paths = data.get('mask_paths', [])
+
+        if not mask_paths:
+            return jsonify({'error': 'mask_paths is required'}), 400
+
+        if len(mask_paths) > 200:
+            return jsonify({'error': 'Maximum 200 paths per request'}), 400
+
+        from utils.supabase_client import SupabaseManager
+        from config import MASKS_BUCKET
+        supabase_manager = SupabaseManager()
+
+        signed_urls = {}
+        try:
+            # Use batch signed URL generation
+            results = supabase_manager.supabase.storage.from_(MASKS_BUCKET).create_signed_urls(
+                mask_paths, 3600
+            )
+            for item in results:
+                path = item.get('path', '')
+                url = item.get('signedURL', '')
+                if path and url:
+                    signed_urls[path] = url
+        except Exception:
+            # Fallback: generate signed URLs individually
+            for path in mask_paths:
+                try:
+                    url = supabase_manager.get_signed_url(path, bucket=MASKS_BUCKET)
+                    signed_urls[path] = url
+                except Exception as e:
+                    print(f"Failed to get signed URL for {path}: {e}")
+
+        return jsonify({
+            'success': True,
+            'signed_urls': signed_urls
+        })
+
+    except Exception as e:
+        print(f"Error getting batch signed URLs: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to get signed URLs: {str(e)}'}), 500
+        
 @app.route('/api/medsam/clear_cache', methods=['POST'])
 def medsam_clear_cache():
     """Clear the masks cache"""
