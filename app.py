@@ -1463,6 +1463,14 @@ def medsam_get_mask_image():
 @app.route('/api/medsam/get_mask_signed_urls', methods=['POST', 'OPTIONS'])
 def medsam_get_mask_signed_urls():
     """Batch generate signed URLs for mask images stored in Supabase"""
+    if request.method == 'OPTIONS':
+        # Handle CORS preflight
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+
     try:
         data = request.get_json()
         mask_paths = data.get('mask_paths', [])
