@@ -1094,8 +1094,9 @@ def save_masks(image_id: str, masks: list):
 
     if records:
         try:
-            supabase.table(MASKS_TABLE).insert(records, returning='minimal').execute()
-            logger.info(f"Inserted {len(records)} mask records into {MASKS_TABLE}")
+            result = supabase.table(MASKS_TABLE).insert(records).execute()
+            saved_ids = [r['id'] for r in (result.data or [])]
+            logger.info(f"Inserted {len(records)} mask records into {MASKS_TABLE}, ids={saved_ids}")
         except Exception as e:
             logger.error(f"Failed to insert mask records into {MASKS_TABLE}: {e}")
             import traceback

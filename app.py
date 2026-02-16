@@ -1784,13 +1784,14 @@ def medsam_save_manual_masks():
         
         # Use the existing save_masks function
         try:
-            save_masks(str(image_id), formatted_masks)
-            print(f"Successfully saved {len(formatted_masks)} masks to database")
-            
+            saved_ids = save_masks(str(image_id), formatted_masks)
+            print(f"Successfully saved {len(formatted_masks)} masks to database, ids={saved_ids}")
+
             return jsonify({
                 'success': True,
                 'message': f'Successfully saved {len(formatted_masks)} masks',
-                'saved_count': len(formatted_masks)
+                'saved_count': len(formatted_masks),
+                'saved_ids': saved_ids
             })
             
         except Exception as save_error:
