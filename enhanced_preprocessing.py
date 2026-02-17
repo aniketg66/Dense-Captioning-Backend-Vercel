@@ -30,8 +30,8 @@ except ImportError:
     GRADIO_CLIENT_AVAILABLE = False
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────
-SUPABASE_URL       = os.getenv("REACT_APP_SUPABASE_URL")
-SUPABASE_KEY       = os.getenv("REACT_APP_SUPABASE_ANON_KEY")
+SUPABASE_URL       = os.getenv("REACT_APP_SUPABASE_URL") or os.getenv("SUPABASE_URL")
+SUPABASE_KEY       = os.getenv("REACT_APP_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Enhanced 21-class categories for comprehensive chart element detection
@@ -56,6 +56,12 @@ CHART_ELEMENTS_TABLE = "chart_elements"
 TEXT_ELEMENTS_TABLE = "text_elements"
 
 # ─── CLIENT INIT ───────────────────────────────────────────────────────────
+if not SUPABASE_URL or not SUPABASE_KEY:
+    logger.error("SUPABASE_URL or SUPABASE_KEY not set! "
+                 "Set REACT_APP_SUPABASE_URL / REACT_APP_SUPABASE_ANON_KEY "
+                 "or SUPABASE_URL / SUPABASE_KEY in environment.")
+    raise ValueError("Missing Supabase credentials for preprocessing")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ─── HUGGINGFACE API SETUP (PRIMARY) ──────────────────────────────────────
@@ -698,10 +704,23 @@ def download_image(storage_link: str, bucket: str = IMAGE_BUCKET, expires_sec: i
     """
     # 1) parse out the bucket‐internal path
     p = urlparse(storage_link).path
-    # strip '/storage/v1/object/public/'
+    # Try common path prefixes for Supabase storage URLs
     prefix = "/storage/v1/object/public/images/"
-    assert prefix in p, f"unexpected storage_link: {storage_link}"
-    internal_path = p.split(prefix, 1)[1]
+    if prefix not in p:
+        # Try without the bucket name in case URL format differs
+        alt_prefix = "/storage/v1/object/public/"
+        if alt_prefix in p:
+            # Extract everything after /public/ and strip the bucket name
+            after_public = p.split(alt_prefix, 1)[1]
+            # Remove bucket prefix if present (e.g., "images/task_id/file.jpg" -> "task_id/file.jpg")
+            if after_public.startswith(f"{bucket}/"):
+                internal_path = after_public[len(f"{bucket}/"):]
+            else:
+                internal_path = after_public
+        else:
+            raise ValueError(f"Unexpected storage_link format: {storage_link}")
+    else:
+        internal_path = p.split(prefix, 1)[1]
 
     # 2) get signed URL
     logger.info(f"Getting signed URL for: {bucket}/{internal_path}")

@@ -1107,19 +1107,32 @@ def trigger_preprocessing(task_id):
         # Import the preprocessing function
         from enhanced_preprocessing import process_task_async
         import threading
-        
-        # Start preprocessing in a background thread
-        thread = threading.Thread(target=process_task_async, args=(task_id,))
-        thread.daemon = True
+
+        def _run_with_logging(tid):
+            """Wrapper that catches and logs all errors from the background thread"""
+            try:
+                process_task_async(tid)
+            except Exception as exc:
+                print(f"[PREPROCESSING ERROR] task {tid}: {exc}")
+                import traceback
+                traceback.print_exc()
+
+        # Start preprocessing in a background thread (non-daemon so it completes)
+        thread = threading.Thread(target=_run_with_logging, args=(task_id,))
+        thread.daemon = False
         thread.start()
-        
+
+        print(f"Preprocessing thread started for task {task_id}")
+
         return jsonify({
             "success": True,
             "message": f"Preprocessing started for task {task_id}"
         })
-        
+
     except Exception as e:
         print(f"Error triggering preprocessing for task {task_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "error": f"Failed to trigger preprocessing: {str(e)}"
         }), 500
