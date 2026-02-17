@@ -89,29 +89,42 @@ def get_page_number_from_filename(filename):
         return int(match.group(1))
     return None
 
-def image_to_base64(image_path):
-    """Convert image to base64 string for frontend display."""
+def image_to_base64(image_path, max_dimension=1600):
+    """Convert image to base64 string for frontend display.
+
+    Resizes large images to keep payload size manageable.
+    """
     try:
         with open(image_path, 'rb') as img_file:
             img_data = img_file.read()
-            
+
             # Validate that we have image data
             if len(img_data) == 0:
                 print(f"Error: Empty image file at {image_path}")
                 return None
-            
-            base64_data = base64.b64encode(img_data).decode('utf-8')
-            
-            # Determine image format
+
             img = Image.open(io.BytesIO(img_data))
-            format_ext = img.format.lower()
-            
+
             # Validate image dimensions
             if img.size[0] < 10 or img.size[1] < 10:
                 print(f"Error: Image too small ({img.size[0]}x{img.size[1]}) at {image_path}")
                 return None
-            
-            return f"data:image/{format_ext};base64,{base64_data}"
+
+            # Resize if either dimension exceeds max_dimension to reduce payload
+            if img.size[0] > max_dimension or img.size[1] > max_dimension:
+                img.thumbnail((max_dimension, max_dimension), Image.LANCZOS)
+                print(f"  Resized image to {img.size[0]}x{img.size[1]}")
+
+            # Convert to JPEG for smaller payload
+            buffer = io.BytesIO()
+            if img.mode == 'RGBA':
+                img = img.convert('RGB')
+            img.save(buffer, format='JPEG', quality=85)
+            img_data = buffer.getvalue()
+
+            base64_data = base64.b64encode(img_data).decode('utf-8')
+
+            return f"data:image/jpeg;base64,{base64_data}"
     except Exception as e:
         print(f"Error converting image to base64: {e}")
         return None
@@ -152,7 +165,7 @@ def extract_images_from_pdf(pdf_path):
             str(temp_dir / "page")
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
             print(f"  Error running pdftohtml: {result.stderr}")
             raise Exception(f"pdftohtml failed: {result.stderr}")
