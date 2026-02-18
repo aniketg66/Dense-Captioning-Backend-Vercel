@@ -55,70 +55,89 @@ CHART_ANALYSIS_TABLE = "chart_analysis"
 CHART_ELEMENTS_TABLE = "chart_elements"
 TEXT_ELEMENTS_TABLE = "text_elements"
 
-# ─── CLIENT INIT ───────────────────────────────────────────────────────────
-if not SUPABASE_URL or not SUPABASE_KEY:
-    logger.error("SUPABASE_URL or SUPABASE_KEY not set! "
-                 "Set REACT_APP_SUPABASE_URL / REACT_APP_SUPABASE_ANON_KEY "
-                 "or SUPABASE_URL / SUPABASE_KEY in environment.")
-    raise ValueError("Missing Supabase credentials for preprocessing")
+# ─── LAZY CLIENT INIT ─────────────────────────────────────────────────────
+# Clients are initialized lazily to avoid proxy/env-var issues at import time.
+# On Render, proxy env vars can cause httpx (used by supabase/gotrue) to crash
+# if they are still set when the client is created. app.py removes them at
+# module level, but this file may be imported before that cleanup runs.
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ─── HUGGINGFACE API SETUP (PRIMARY) ──────────────────────────────────────
-# HuggingFace Space for SAM/MedSAM inference
 MEDSAM_HF_SPACE = os.getenv("MEDSAM_HF_SPACE", "Aniketg6/medsam-inference")
 HF_SPACE_URL = "https://hanszhu-dense-captioning-platform.hf.space"
-
-# Initialize HuggingFace client for auto mask generation
-hf_mask_client = None
 USE_HF_FOR_MASKS = os.getenv("USE_HF_FOR_MASKS", "true").lower() == "true"
 
-if GRADIO_CLIENT_AVAILABLE and USE_HF_FOR_MASKS:
+_supabase_client = None
+_hf_mask_client = None
+_hf_mask_client_initialized = False
+
+
+def _clean_proxy_env():
+    """Remove proxy env vars that break httpx/gradio_client on Render"""
+    for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy',
+                'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
+        os.environ.pop(var, None)
+
+
+def get_supabase():
+    """Lazily create Supabase client (after proxy env vars are cleaned)"""
+    global _supabase_client
+    if _supabase_client is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError(
+                "Missing Supabase credentials. Set REACT_APP_SUPABASE_URL / "
+                "REACT_APP_SUPABASE_ANON_KEY or SUPABASE_URL / SUPABASE_KEY."
+            )
+        _clean_proxy_env()
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Supabase client initialized (lazy)")
+    return _supabase_client
+
+
+def get_hf_mask_client():
+    """Lazily create HuggingFace mask client"""
+    global _hf_mask_client, _hf_mask_client_initialized
+    if _hf_mask_client_initialized:
+        return _hf_mask_client
+    _hf_mask_client_initialized = True
+
+    if not GRADIO_CLIENT_AVAILABLE or not USE_HF_FOR_MASKS:
+        return None
+
     try:
+        _clean_proxy_env()
         logger.info(f"Connecting to HuggingFace Space: {MEDSAM_HF_SPACE}")
-        hf_mask_client = GradioClient(MEDSAM_HF_SPACE)
-        
-        # Check if auto mask generation is available
+        _hf_mask_client = GradioClient(MEDSAM_HF_SPACE)
         try:
-            status_result = hf_mask_client.predict(api_name="/check_auto_mask_status")
+            status_result = _hf_mask_client.predict(api_name="/check_auto_mask_status")
             status = json.loads(status_result)
             if status.get('available'):
-                logger.info(f"✓ HuggingFace auto mask generation available (device: {status.get('device')})")
+                logger.info(f"HuggingFace auto mask generation available (device: {status.get('device')})")
             else:
                 logger.warning("HuggingFace Space connected but SAM-H model not loaded")
-                logger.warning("Automatic mask generation will use local model if available")
         except Exception as e:
             logger.warning(f"Could not check HuggingFace auto mask status: {e}")
-            
     except Exception as e:
         logger.warning(f"Could not connect to HuggingFace Space: {e}")
-        hf_mask_client = None
+        _hf_mask_client = None
 
-# Scientific Image Analyzer (keeping for compatibility but not using for processing)
-try:
-    from science_analyzer import ScientificImageAnalyzer
-    science_analyzer = ScientificImageAnalyzer()
-    logger.info("Scientific Image Analyzer loaded successfully (for compatibility)")
-except Exception as e:
-    logger.warning(f"Could not load Scientific Image Analyzer: {e}")
-    science_analyzer = None
+    return _hf_mask_client
 
 # ─── HF MASK GENERATION API ────────────────────────────────────────────────
 
 def generate_masks_via_huggingface(image_path: str) -> list:
     """
     Generate automatic masks using HuggingFace Space API
-    
+
     Args:
         image_path: Path to the image file
-        
+
     Returns:
         List of masks in the same format as SamAutomaticMaskGenerator.generate()
     """
-    if not hf_mask_client:
+    client = get_hf_mask_client()
+    if not client:
         logger.warning("HuggingFace mask client not available")
         return None
-    
+
     try:
         logger.info(f"Calling HuggingFace API for automatic mask generation...")
 
@@ -128,7 +147,7 @@ def generate_masks_via_huggingface(image_path: str) -> list:
         params = {"max_masks": -1, "resize_longest": 512}
 
         start = time.perf_counter()
-        result = hf_mask_client.predict(
+        result = client.predict(
             image=handle_file(image_path),
             request_json=json.dumps(params),
             api_name="/generate_auto_masks",
@@ -184,7 +203,8 @@ def generate_embedding_via_huggingface(image_path: str, image_id: str) -> bool:
     Returns:
         True on success, False otherwise
     """
-    if not hf_mask_client:
+    client = get_hf_mask_client()
+    if not client:
         logger.warning("HuggingFace mask client not available (cannot generate embeddings)")
         return False
 
@@ -194,7 +214,7 @@ def generate_embedding_via_huggingface(image_path: str, image_id: str) -> bool:
         params = {"image_id": image_id}
 
         start = time.perf_counter()
-        result = hf_mask_client.predict(
+        result = client.predict(
             image=handle_file(image_path),
             request_json=json.dumps(params),
             api_name="/encode_image",
@@ -231,7 +251,7 @@ def generate_embedding_via_huggingface(image_path: str, image_id: str) -> bool:
         # Save embedding array to Supabase
         try:
             path = upload_embedding(image_id, arr)
-            supabase.table(EMBED_TABLE).insert(
+            get_supabase().table(EMBED_TABLE).insert(
                 {"image_id": image_id, "file_path": path}
             ).execute()
             logger.info(
@@ -263,7 +283,7 @@ def generate_masks(img_np: np.ndarray, temp_image_path: str = None) -> list:
         List of masks
     """
     # Only HuggingFace Space is used now; no local SAM fallback.
-    if hf_mask_client and temp_image_path and USE_HF_FOR_MASKS:
+    if get_hf_mask_client() and temp_image_path and USE_HF_FOR_MASKS:
         masks = generate_masks_via_huggingface(temp_image_path)
         if masks:
             logger.info("Using masks from HuggingFace API")
@@ -334,9 +354,12 @@ def call_hf_space_api(image_path):
     """
     try:
         from gradio_client import Client, handle_file
-        
+
         logger.info(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
-        
+
+        # Clean proxy env vars that break gradio_client on Render
+        _clean_proxy_env()
+
         # Initialize client with direct URL (working approach)
         client = Client("https://hanszhu-dense-captioning-platform.hf.space")
         
@@ -588,7 +611,7 @@ def parse_det_data_sample_string(det_data_sample_str, element_type_prefix="eleme
 def fetch_chart_analysis(image_id: str):
     """Fetch chart type classification results for an image"""
     try:
-        response = supabase.table(CHART_ANALYSIS_TABLE).select('*').eq('image_id', image_id).execute()
+        response = get_supabase().table(CHART_ANALYSIS_TABLE).select('*').eq('image_id', image_id).execute()
         if response.data:
             return response.data[0]  # Return the first (and should be only) result
         return None
@@ -599,7 +622,7 @@ def fetch_chart_analysis(image_id: str):
 def fetch_chart_elements(image_id: str):
     """Fetch chart element detection results for an image (including data points)"""
     try:
-        response = supabase.table(CHART_ELEMENTS_TABLE).select('*').eq('image_id', image_id).execute()
+        response = get_supabase().table(CHART_ELEMENTS_TABLE).select('*').eq('image_id', image_id).execute()
         logger.info(f"Fetched {len(response.data)} chart elements (including data points) from database for image {image_id}")
         
         elements = []
@@ -634,7 +657,7 @@ def fetch_chart_elements(image_id: str):
 def fetch_text_elements(image_id: str):
     """Fetch OCR text detection results for an image"""
     try:
-        response = supabase.table(TEXT_ELEMENTS_TABLE).select('*').eq('image_id', image_id).execute()
+        response = get_supabase().table(TEXT_ELEMENTS_TABLE).select('*').eq('image_id', image_id).execute()
         elements = []
         for record in response.data:
             # Convert database format back to analysis format
@@ -683,18 +706,18 @@ def fetch_preprocessed_science_results(image_id: str):
 def fetch_scientific_tasks():
     """Fetch tasks where isReady is false and category is Scientific Figures"""
     # fetch category ID for "Scientific Figures"
-    resp = supabase.table(CATEGORIES_TABLE).select('id').eq('name', 'Scientific Figures').execute()
+    resp = get_supabase().table(CATEGORIES_TABLE).select('id').eq('name', 'Scientific Figures').execute()
     if not resp.data:
         logger.info("No category 'Scientific Figures' found.")
         return []
     cat_id = resp.data[0]['id']
 
     # fetch tasks where isReady is false and category matches
-    resp = supabase.table(TASKS_TABLE).select('id').eq('category_id', cat_id).eq('isReady', False).execute()
+    resp = get_supabase().table(TASKS_TABLE).select('id').eq('category_id', cat_id).eq('isReady', False).execute()
     return [t['id'] for t in resp.data] if resp.data else []
 
 def fetch_images_for_task(task_id):
-    resp = supabase.table(IMAGES_TABLE).select('id, storage_link').eq('task_id', task_id).execute()
+    resp = get_supabase().table(IMAGES_TABLE).select('id, storage_link').eq('task_id', task_id).execute()
     return resp.data
 
 def download_image(storage_link: str, bucket: str = IMAGE_BUCKET, expires_sec: int = 3600) -> np.ndarray:
@@ -724,7 +747,7 @@ def download_image(storage_link: str, bucket: str = IMAGE_BUCKET, expires_sec: i
 
     # 2) get signed URL
     logger.info(f"Getting signed URL for: {bucket}/{internal_path}")
-    signed = supabase.storage.from_(bucket).create_signed_url(internal_path, expires_sec)
+    signed = get_supabase().storage.from_(bucket).create_signed_url(internal_path, expires_sec)
     signed_url = signed["signedUrl"]
 
     # 3) fetch bytes
@@ -743,7 +766,7 @@ def upload_mask(image_id: str, mask: np.ndarray) -> str:
     img = Image.fromarray((mask.astype(np.uint8) * 255))
     buf = io.BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
     path = f"{image_id}/{uuid.uuid4().hex}.png"
-    supabase.storage.from_(MASK_BUCKET).upload(path, buf.read())
+    get_supabase().storage.from_(MASK_BUCKET).upload(path, buf.read())
     return path
 
 def save_masks(image_id: str, masks: list):
@@ -839,7 +862,7 @@ def save_masks(image_id: str, masks: list):
     saved_ids = [r['id'] for r in records]
     if records:
         try:
-            supabase.table(MASKS_TABLE).insert(records).execute()
+            get_supabase().table(MASKS_TABLE).insert(records).execute()
             logger.info(f"Inserted {len(records)} mask records into {MASKS_TABLE}, ids={saved_ids}")
         except Exception as e:
             logger.error(f"Failed to insert mask records into {MASKS_TABLE}: {e}")
@@ -858,12 +881,12 @@ def upload_embedding(image_id: str, arr: np.ndarray) -> str:
     np.save(buf, arr.astype(np.float32))
     buf.seek(0)
     path = f"{image_id}/{uuid.uuid4().hex}.npy"
-    supabase.storage.from_(EMBED_BUCKET).upload(path, buf.read())
+    get_supabase().storage.from_(EMBED_BUCKET).upload(path, buf.read())
     return path
 
 def save_chart_analysis(image_id: str, chart_type: str, confidence: float):
     """Save chart type classification results"""
-    supabase.table(CHART_ANALYSIS_TABLE).insert({
+    get_supabase().table(CHART_ANALYSIS_TABLE).insert({
         'image_id': image_id,
         'chart_type': chart_type,
         'confidence': confidence
@@ -895,7 +918,7 @@ def save_chart_elements(image_id: str, elements: list):
             })
     
     if records:
-        supabase.table(CHART_ELEMENTS_TABLE).insert(records).execute()
+        get_supabase().table(CHART_ELEMENTS_TABLE).insert(records).execute()
 
 
 
@@ -925,7 +948,7 @@ def save_text_elements(image_id: str, text_elements: list):
             })
     
     if records:
-        supabase.table(TEXT_ELEMENTS_TABLE).insert(records).execute()
+        get_supabase().table(TEXT_ELEMENTS_TABLE).insert(records).execute()
 
 def classify_chart_type_and_decide_pipeline(image_path: str, image_id: str):
     """
@@ -1144,7 +1167,7 @@ def process_task(task_id: str):
 
     # Mark task as ready
     try:
-        supabase.table(TASKS_TABLE).update({'isReady': True}).eq('id', task_id).execute()
+        get_supabase().table(TASKS_TABLE).update({'isReady': True}).eq('id', task_id).execute()
         logger.info(f"Task {task_id} marked as ready")
     except Exception as e:
         logger.error(f"Error marking task {task_id} as ready: {e}")
