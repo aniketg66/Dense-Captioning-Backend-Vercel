@@ -34,14 +34,6 @@ SUPABASE_URL       = os.getenv("REACT_APP_SUPABASE_URL") or os.getenv("SUPABASE_
 SUPABASE_KEY       = os.getenv("REACT_APP_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Enhanced 21-class categories for comprehensive chart element detection
-ENHANCED_CLASS_NAMES = [
-    'title', 'subtitle', 'x-axis', 'y-axis', 'x-axis-label', 'y-axis-label',
-    'x-tick-label', 'y-tick-label', 'legend', 'legend-title', 'legend-item',
-    'data-point', 'data-line', 'data-bar', 'data-area', 'grid-line',
-    'axis-title', 'tick-label', 'data-label', 'legend-text', 'plot-area'
-]
-
 # Database tables
 TASKS_TABLE        = "tasks"
 CATEGORIES_TABLE   = "categories"
@@ -62,7 +54,6 @@ TEXT_ELEMENTS_TABLE = "text_elements"
 # module level, but this file may be imported before that cleanup runs.
 
 MEDSAM_HF_SPACE = os.getenv("MEDSAM_HF_SPACE", "Aniketg6/medsam-inference")
-HF_SPACE_URL = "https://hanszhu-dense-captioning-platform.hf.space"
 USE_HF_FOR_MASKS = os.getenv("USE_HF_FOR_MASKS", "true").lower() == "true"
 
 _supabase_client = None
@@ -324,315 +315,6 @@ def generate_masks(img_np: np.ndarray, temp_image_path: str = None) -> list:
     return None
 
 
-# ─── HF SPACE API FUNCTIONS ─────────────────────────────────────────────────
-
-def perform_local_ocr(img_np: np.ndarray):
-    """
-    Perform local OCR using EasyOCR for text detection
-    Returns list of text elements with bbox and confidence
-    """
-    try:
-        import easyocr
-        
-        # Initialize EasyOCR reader if not already done
-        if not hasattr(perform_local_ocr, 'reader'):
-            perform_local_ocr.reader = easyocr.Reader(['en'])
-        
-        logger.info("Running local EasyOCR for text detection")
-        
-        # Perform OCR
-        results = perform_local_ocr.reader.readtext(img_np)
-        
-        text_elements = []
-        for (bbox, text, confidence) in results:
-            # Convert bbox format from EasyOCR to our format
-            # EasyOCR bbox is [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
-            # Our format is [x1, y1, x2, y2]
-            x_coords = [point[0] for point in bbox]
-            y_coords = [point[1] for point in bbox]
-            
-            bbox_formatted = [
-                float(min(x_coords)),  # x1
-                float(min(y_coords)),  # y1
-                float(max(x_coords)),  # x2
-                float(max(y_coords))   # y2
-            ]
-            
-            text_elements.append({
-                'text': text,
-                'bbox': bbox_formatted,
-                'confidence': confidence,
-                'element_type': 'text',
-                'label': 'text'
-            })
-        
-        logger.info(f"Local OCR detected {len(text_elements)} text elements")
-        return text_elements
-        
-    except Exception as e:
-        logger.error(f"Error in local OCR: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        return []
-
-def call_hf_space_api(image_path):
-    """
-    Call the Dense Captioning Platform API using gradio_client to analyze a scientific image
-    Returns the raw API response
-    """
-    try:
-        from gradio_client import Client, handle_file
-
-        logger.info(f"Calling Dense Captioning Platform API: {HF_SPACE_URL}")
-
-        # Clean proxy env vars that break gradio_client on Render
-        _clean_proxy_env()
-
-        # Initialize client with direct URL (working approach)
-        client = Client("https://hanszhu-dense-captioning-platform.hf.space")
-        
-        # Call the predict function using the working approach
-        try:
-            result = client.predict(
-                image=handle_file(image_path),
-                fn_index=0
-            )
-        except Exception as e:
-            logger.error(f"API call failed: {e}")
-            raise e
-        
-        logger.info(f"API result received: {type(result)}")
-        logger.info(f"API result content: {result}")
-        return result
-            
-    except Exception as e:
-        logger.error(f"Error calling Dense Captioning Platform API: {str(e)}")
-        logger.error(f"Error type: {type(e)}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        return None
-
-def parse_hf_space_response(hf_response):
-    """
-    Parse the HF Space API response from gradio_client and convert it to the format expected by the pipeline
-    """
-    if not hf_response:
-        logger.warning("HF Space response is empty or None")
-        return None
-    
-    logger.info(f"Parsing HF Space response of type: {type(hf_response)}")
-    
-    try:
-        # The gradio_client response might be a string or dict
-        if isinstance(hf_response, str):
-            # Check if it's an empty string
-            if not hf_response.strip():
-                logger.warning("HF Space response is empty string")
-                return None
-                
-            # Try to parse as JSON if it's a string
-            try:
-                import json
-                hf_response = json.loads(hf_response)
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse as JSON: {e}")
-                # If it's not JSON, it might be the raw DetDataSample string
-                pass
-        
-        # If it's still a string, it's likely the DetDataSample format
-        if isinstance(hf_response, str):
-            return parse_det_data_sample_string(hf_response)
-        
-        # If it's a dict, extract the data
-        if isinstance(hf_response, dict):
-            # Extract chart type information
-            chart_type_id = hf_response.get('chart_type_id', None)
-            chart_type_label = hf_response.get('chart_type_label', None)
-            chart_type_name = chart_type_label if chart_type_label else f"chart_type_{chart_type_id}" if chart_type_id else None
-            
-            # Parse element results (DetDataSample format) - these are chart elements (axes, titles, legends, etc.)
-            element_result = hf_response.get('element_result', '')
-            chart_elements = parse_det_data_sample_string(element_result, element_type_prefix="chart_element") if element_result else []
-            
-            # Parse datapoint results (DetDataSample format) - these are actual data points (bars, points, lines, etc.)
-            datapoint_result = hf_response.get('datapoint_result', '')
-            data_points = parse_det_data_sample_string(datapoint_result, element_type_prefix="data_point") if datapoint_result else []
-            
-            # Apply thresholds to filter elements
-            element_threshold = 0.4  # General chart elements
-            datapoint_threshold = 0.4  # Data points (not bars)
-            databar_threshold = 0.01   # Data bars (very low threshold)
-            
-            # Filter chart elements by confidence
-            filtered_chart_elements = []
-            for elem in chart_elements:
-                element_type = elem.get('element_type', '').lower()
-                confidence = elem.get('confidence', 0)
-                
-                # Use different thresholds based on element type
-                if 'data-bar' in element_type or 'bar' in element_type:
-                    threshold = databar_threshold  # Very low for bars
-                elif 'data-point' in element_type or 'data-line' in element_type:
-                    threshold = datapoint_threshold  # Higher for data points/lines
-                else:
-                    threshold = element_threshold  # General elements
-                
-                if confidence >= threshold:
-                    filtered_chart_elements.append(elem)
-            
-            # Filter data points by confidence and add them to chart elements
-            filtered_data_points = []
-            for dp in data_points:
-                element_type = dp.get('element_type', '').lower()
-                confidence = dp.get('confidence', 0)
-                
-                # Use different thresholds based on element type
-                if 'data-bar' in element_type or 'bar' in element_type:
-                    threshold = databar_threshold  # Very low for bars
-                elif 'data-point' in element_type or 'data-line' in element_type:
-                    threshold = datapoint_threshold  # Higher for data points/lines
-                else:
-                    threshold = element_threshold  # General elements
-                
-                if confidence >= threshold:
-                    filtered_data_points.append(dp)
-            
-            # Combine chart elements and data points into a single list
-            all_chart_elements = filtered_chart_elements + filtered_data_points
-            
-            # Group elements by type and add numbering
-            element_type_groups = {}
-            for elem in all_chart_elements:
-                element_type = elem.get('element_type', '')
-                if element_type not in element_type_groups:
-                    element_type_groups[element_type] = []
-                element_type_groups[element_type].append(elem)
-            
-            # Reconstruct list with elements grouped by type and numbered
-            all_chart_elements = []
-            for element_type, elements in element_type_groups.items():
-                for i, elem in enumerate(elements, 1):
-                    elem['element_type'] = f"{element_type} {i}"
-                    all_chart_elements.append(elem)
-            
-            logger.info(f"Threshold filtering results:")
-            logger.info(f"  Chart elements: {len(chart_elements)} -> {len(filtered_chart_elements)} (threshold: {databar_threshold} for bars, {element_threshold} for others)")
-            logger.info(f"  Data points: {len(data_points)} -> {len(filtered_data_points)} (threshold: {datapoint_threshold})")
-            logger.info(f"  Combined chart elements: {len(all_chart_elements)}")
-            
-            # Combine all results (text elements will be added by local OCR)
-            analysis_results = {
-                'chart_type': chart_type_name,
-                'chart_type_confidence': 0.9 if chart_type_name else None,
-                'chart_elements': all_chart_elements,
-                'text_elements': [],  # Will be filled by local OCR
-                'status': hf_response.get('status', 'unknown'),
-                'processing_time': hf_response.get('processing_time', 0)
-            }
-            
-            logger.info(f"Final parsed analysis results: chart_type={chart_type_name}, total elements={len(all_chart_elements)}")
-            
-            return analysis_results
-        
-    except Exception as e:
-        logger.error(f"Error parsing HF Space response: {str(e)}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-
-
-def parse_det_data_sample_string(det_data_sample_str, element_type_prefix="element"):
-    """
-    Parse a DetDataSample string format and convert it to the format expected by the pipeline
-    
-    Args:
-        det_data_sample_str: The DetDataSample string to parse
-        element_type_prefix: Prefix for element types ("chart_element" or "data_point")
-    """
-    try:
-        if not det_data_sample_str or not isinstance(det_data_sample_str, str):
-            return []
-        
-        import re
-        
-        # Extract bounding boxes, labels, and scores from the string
-        bboxes = []
-        labels = []
-        scores = []
-        
-        # Parse bboxes - look for tensor format with multiple bbox arrays
-        # The bboxes are in format: tensor([[x1, y1, x2, y2], [x1, y1, x2, y2], ...])
-        bbox_pattern = r'bboxes:\s*tensor\(\[(.*?)\]\)'
-        bbox_matches = re.findall(bbox_pattern, det_data_sample_str, re.DOTALL)
-        
-        if bbox_matches:
-            bbox_content = bbox_matches[0]
-            # Split by individual bbox arrays - more robust pattern
-            bbox_array_pattern = r'\[\s*([\d\.,\s\-]+)\s*\]'
-            bbox_arrays = re.findall(bbox_array_pattern, bbox_content)
-            
-            logger.info(f"Found {len(bbox_arrays)} bbox arrays in content")
-            
-            for bbox_str in bbox_arrays:
-                bbox_str = bbox_str.strip()
-                if bbox_str:
-                    try:
-                        # Split by comma and convert to floats, handle whitespace better
-                        bbox_values = [float(x.strip()) for x in bbox_str.split(',') if x.strip()]
-                        if len(bbox_values) == 4:
-                            bboxes.append(bbox_values)
-                        else:
-                            logger.warning(f"Invalid bbox format: {bbox_str} (expected 4 values, got {len(bbox_values)})")
-                    except ValueError as e:
-                        logger.warning(f"Failed to parse bbox values from '{bbox_str}': {e}")
-                        continue
-        
-        # Parse labels - look for tensor format
-        label_pattern = r'labels:\s*tensor\(\[([\d\s,]+)\]\)'
-        label_matches = re.findall(label_pattern, det_data_sample_str)
-        if label_matches:
-            label_str = label_matches[0]
-            labels = [int(x.strip()) for x in label_str.split(',') if x.strip()]
-            logger.info(f"Found {len(labels)} labels")
-        else:
-            logger.warning("No labels found in DetDataSample string")
-        
-        # Parse scores - look for tensor format
-        score_pattern = r'scores:\s*tensor\(\[([\d\.\s,]+)\]\)'
-        score_matches = re.findall(score_pattern, det_data_sample_str)
-        if score_matches:
-            score_str = score_matches[0]
-            scores = [float(x.strip()) for x in score_str.split(',') if x.strip()]
-            logger.info(f"Found {len(scores)} scores")
-        else:
-            logger.warning("No scores found in DetDataSample string")
-        
-        # Create elements with proper type prefix
-        elements = []
-        min_length = min(len(bboxes), len(labels), len(scores))
-        logger.info(f"Creating elements: bboxes={len(bboxes)}, labels={len(labels)}, scores={len(scores)}, min_length={min_length}")
-        
-        for i in range(min_length):
-            label_idx = labels[i]
-            # Use meaningful class names from ENHANCED_CLASS_NAMES
-            if label_idx < len(ENHANCED_CLASS_NAMES):
-                element_type = ENHANCED_CLASS_NAMES[label_idx]
-            else:
-                element_type = f'{element_type_prefix}_{label_idx}'
-            elements.append({
-                'element_type': element_type,
-                'bbox': bboxes[i],
-                'confidence': scores[i],
-                'label': element_type
-            })
-        
-        logger.info(f"Parsed {len(elements)} {element_type_prefix} elements from DetDataSample string")
-        return elements
-        
-    except Exception as e:
-        logger.error(f"Error parsing DetDataSample string: {str(e)}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        return []
 
 # ─── FETCH FUNCTIONS ────────────────────────────────────────────────────────
 
@@ -986,180 +668,22 @@ def save_text_elements(image_id: str, text_elements: list):
     if records:
         get_supabase().table(TEXT_ELEMENTS_TABLE).insert(records).execute()
 
-def classify_chart_type_and_decide_pipeline(image_path: str, image_id: str):
-    """
-    Classify chart type using HF Space API and decide which pipeline to use:
-    - Medical images -> MedSAM pipeline
-    - Allowed scientific figures -> Science analyzer pipeline
-    - Other scientific figures -> Skip science analyzer, only save chart type
-    """
-    try:
-        logger.info(f"Calling HF Space API for chart type classification of image {image_id}")
-        
-        # Call HF Space API for chart type classification
-        hf_response = call_hf_space_api(image_path)
-        
-        if not hf_response:
-            logger.warning("HF Space API returned no response, using default SAM pipeline")
-            return "sam_pipeline", None
-        
-        # Parse the HF Space response
-        analysis_results = parse_hf_space_response(hf_response)
-        
-        if not analysis_results:
-            logger.warning("Failed to parse HF Space response, using default SAM pipeline")
-            return "sam_pipeline", None
-        
-        # Get chart type from analysis results
-        chart_type = analysis_results.get('chart_type')
-        chart_type_confidence = analysis_results.get('chart_type_confidence', 0.9)
-        
-        if not chart_type:
-            logger.warning("No chart type detected, using default SAM pipeline")
-            return "sam_pipeline", None
-        
-        logger.info(f"Chart type classification: {chart_type} (confidence: {chart_type_confidence:.3f})")
-        
-        # Save chart analysis results
-        save_chart_analysis(image_id, chart_type, chart_type_confidence)
-        
-        # Decide pipeline based on chart type
-        normalized_chart_type = chart_type.strip().lower()
-        allowed_types = [
-            'scatter plot',
-            'line graph',
-            'bar plot',
-            'medical image',
-            'histogram',
-            'vector plot',
-            'bubble chart'
-        ]
-        if "medical" in normalized_chart_type:
-            logger.info("Medical image detected, using MedSAM pipeline")
-            return "medsam_pipeline", chart_type
-        elif normalized_chart_type in allowed_types:
-            logger.info(f"Allowed scientific figure detected: {normalized_chart_type}, using science analyzer pipeline")
-            return "science_analyzer_pipeline", chart_type
-        else:
-            logger.info(f"Non-allowed scientific figure detected: {normalized_chart_type}, skipping science analyzer pipeline.")
-            return "skip_science_analyzer", chart_type
-    except Exception as e:
-        logger.error(f"Error in chart type classification: {e}")
-        return "sam_pipeline", None
-
 def process_with_sam_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str = None) -> bool:
-    """Process image with standard SAM pipeline. Returns True if masks were saved."""
+    """Generate masks via HuggingFace Space (Aniketg6/medsam-inference) and save them.
+    Returns True if masks were saved."""
     try:
         masks = generate_masks(img_np, temp_image_path)
 
         if masks:
-            logger.info(f"Generated {len(masks)} masks for image")
+            logger.info(f"Generated {len(masks)} masks for image {image_id}")
             save_masks(image_id, masks)
-            logger.info("Masks saved successfully!")
+            logger.info(f"Masks saved successfully for image {image_id}")
             return True
         else:
-            logger.warning("No masks generated - HuggingFace API failed")
+            logger.warning(f"No masks generated for image {image_id}")
             return False
     except Exception as e:
-        logger.error(f"Error in SAM processing: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-
-def process_with_medsam_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str = None) -> bool:
-    """Process image with MedSAM-like pipeline. Returns True if masks were saved."""
-    masks_saved = False
-    try:
-        masks = generate_masks(img_np, temp_image_path)
-
-        if masks:
-            logger.info(f"Generated {len(masks)} masks for medical image")
-            save_masks(image_id, masks)
-            masks_saved = True
-        else:
-            logger.warning("No masks generated for medical image")
-
-        # Also generate and store an embedding for this medical/scientific image
-        if temp_image_path:
-            ok = generate_embedding_via_huggingface(temp_image_path, image_id)
-            if ok:
-                logger.info(f"Embedding generation completed successfully for {image_id}")
-            else:
-                logger.warning(f"Embedding generation failed for {image_id}")
-    except Exception as e:
-        logger.error(f"Error in MedSAM processing: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-    return masks_saved
-
-def process_with_science_analyzer_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str) -> bool:
-    """Process image with HF Space API pipeline + SAM mask generation.
-    Returns True if masks or chart elements/text elements were saved."""
-    saved_anything = False
-    try:
-        logger.info(f"Calling HF Space API for image {image_id}")
-
-        # Call HF Space API for full scientific analysis
-        hf_response = call_hf_space_api(temp_image_path)
-
-        if not hf_response:
-            logger.error(f"HF Space API returned no response for image {image_id}")
-        else:
-            # Parse the HF Space response
-            analysis_results = parse_hf_space_response(hf_response)
-
-            if not analysis_results:
-                logger.error(f"Failed to parse HF Space response for image {image_id}")
-            else:
-                # Save chart type if available
-                chart_type = analysis_results.get('chart_type')
-                if chart_type:
-                    save_chart_analysis(image_id, chart_type, analysis_results.get('chart_type_confidence', 0.9))
-                    logger.info(f"Saved chart type: {chart_type}")
-
-                # Save chart elements
-                chart_elements = analysis_results.get('chart_elements', [])
-                if chart_elements:
-                    confidences = [elem.get('confidence', 0) for elem in chart_elements]
-                    logger.info(f"Chart element confidence range: {min(confidences):.3f} - {max(confidences):.3f}")
-                    logger.info(f"Chart elements with confidence >= 0.4: {sum(1 for c in confidences if c >= 0.4)}")
-                    logger.info(f"Chart elements with confidence >= 0.1: {sum(1 for c in confidences if c >= 0.1)}")
-
-                    save_chart_elements(image_id, chart_elements)
-                    logger.info(f"Saved {len(chart_elements)} chart elements")
-                    saved_anything = True
-
-        # Use local EasyOCR for text detection
-        logger.info(f"Running local EasyOCR for text detection on image {image_id}")
-        text_elements = perform_local_ocr(img_np)
-
-        if text_elements:
-            confidences = [elem.get('confidence', 0) for elem in text_elements]
-            logger.info(f"Local OCR text element confidence range: {min(confidences):.3f} - {max(confidences):.3f}")
-            logger.info(f"Local OCR text elements with confidence >= 0.4: {sum(1 for c in confidences if c >= 0.4)}")
-            logger.info(f"Local OCR text elements with confidence >= 0.1: {sum(1 for c in confidences if c >= 0.1)}")
-
-            save_text_elements(image_id, text_elements)
-            logger.info(f"Saved {len(text_elements)} text elements from local OCR")
-            saved_anything = True
-        else:
-            logger.info("No text elements detected by local OCR")
-
-        # Also generate SAM masks so the segment linking flow works
-        logger.info(f"Generating SAM masks for science image {image_id}")
-        masks = generate_masks(img_np, temp_image_path)
-        if masks:
-            logger.info(f"Generated {len(masks)} SAM masks for science image {image_id}")
-            save_masks(image_id, masks)
-            saved_anything = True
-        else:
-            logger.warning(f"No SAM masks generated for science image {image_id}")
-
-        logger.info("Science analyzer pipeline completed successfully!")
-        return saved_anything
-
-    except Exception as e:
-        logger.error(f"Error in science analyzer processing: {e}")
+        logger.error(f"Error in mask generation for image {image_id}: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
@@ -1181,11 +705,12 @@ def cleanup_temp_image(temp_path: str):
 # ─── PROCESSING ────────────────────────────────────────────────────────────
 def process_task(task_id: str):
     """Enhanced preprocessing for a single task.
-    Only marks the task as ready when at least one image has masks/elements saved."""
+    Only marks the task as ready when ALL images have masks/elements saved."""
     images = fetch_images_for_task(task_id)
     logger.info(f"Processing task {task_id} with {len(images)} images")
 
-    any_image_succeeded = False
+    succeeded_count = 0
+    failed_images = []
 
     for img_rec in images:
         img_id = img_rec['id']
@@ -1197,52 +722,43 @@ def process_task(task_id: str):
             img_np = download_image(img_rec['storage_link'])
             logger.info(f"Image {img_id} downloaded successfully!")
 
-            # Save temporary image for analysis
+            # Save temporary image for HF API call
             temp_image_path = save_temp_image(img_np, img_id)
 
-            # Classify chart type and decide pipeline
-            pipeline_type, chart_type = classify_chart_type_and_decide_pipeline(temp_image_path, img_id)
-
-            # Execute appropriate pipeline and track success
-            success = False
-            if pipeline_type == "medsam_pipeline":
-                success = process_with_medsam_pipeline(img_id, img_np, temp_image_path)
-            elif pipeline_type == "science_analyzer_pipeline":
-                success = process_with_science_analyzer_pipeline(img_id, img_np, temp_image_path)
-            elif pipeline_type == "skip_science_analyzer":
-                logger.info(f"Running medsam pipeline for image {img_id} (chart type: {chart_type})")
-                success = process_with_medsam_pipeline(img_id, img_np, temp_image_path)
-            else:  # default to SAM pipeline
-                success = process_with_sam_pipeline(img_id, img_np, temp_image_path)
+            # Generate masks via MedSAM HuggingFace Space (Aniketg6/medsam-inference)
+            success = process_with_sam_pipeline(img_id, img_np, temp_image_path)
 
             if success:
-                any_image_succeeded = True
-                logger.info(f"Image {img_id} processed successfully (masks/elements saved)")
+                succeeded_count += 1
+                logger.info(f"Image {img_id} processed successfully (masks saved)")
             else:
-                logger.warning(f"Image {img_id} pipeline completed but no masks/elements were saved")
+                failed_images.append(img_id)
+                logger.warning(f"Image {img_id}: no masks were generated/saved")
 
             # Cleanup
             if temp_image_path:
                 cleanup_temp_image(temp_image_path)
 
         except Exception as e:
+            failed_images.append(img_id)
             logger.error(f"Error processing image {img_id}: {e}")
             import traceback
             logger.error(traceback.format_exc())
             if temp_image_path:
                 cleanup_temp_image(temp_image_path)
 
-    # Only mark task as ready if at least one image had masks/elements saved
-    if any_image_succeeded:
+    # Only mark task as ready if ALL images had masks/elements saved
+    all_succeeded = len(images) > 0 and succeeded_count == len(images)
+    if all_succeeded:
         try:
             get_supabase().table(TASKS_TABLE).update({'isReady': True}).eq('id', task_id).execute()
-            logger.info(f"Task {task_id} marked as ready (masks/elements saved for at least one image)")
+            logger.info(f"Task {task_id} marked as ready (all {len(images)} images processed successfully)")
         except Exception as e:
             logger.error(f"Error marking task {task_id} as ready: {e}")
     else:
         logger.error(
-            f"Task {task_id} NOT marked as ready: no images had masks/elements saved. "
-            f"Total images attempted: {len(images)}"
+            f"Task {task_id} NOT marked as ready: {succeeded_count}/{len(images)} images succeeded. "
+            f"Failed images: {failed_images}"
         )
 
 def process_task_async(task_id: str):
