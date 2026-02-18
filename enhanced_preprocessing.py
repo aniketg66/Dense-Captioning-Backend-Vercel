@@ -77,6 +77,33 @@ def _clean_proxy_env():
         os.environ.pop(var, None)
 
 
+def _patch_httpx_proxy():
+    """
+    Monkey-patch httpx.Client and httpx.AsyncClient to accept (and ignore)
+    the 'proxy' kwarg.  This fixes the version mismatch between gotrue
+    (which passes proxy=) and older httpx versions (which don't accept it).
+    """
+    try:
+        import httpx
+        for cls in (httpx.Client, httpx.AsyncClient):
+            original_init = cls.__init__
+            if getattr(original_init, '_proxy_patched', False):
+                continue
+
+            def _make_patched(orig):
+                def patched_init(self, *args, **kwargs):
+                    kwargs.pop('proxy', None)
+                    kwargs.pop('proxies', None)
+                    return orig(self, *args, **kwargs)
+                patched_init._proxy_patched = True
+                return patched_init
+
+            cls.__init__ = _make_patched(original_init)
+        logger.info("Patched httpx Client/AsyncClient to accept proxy kwarg")
+    except Exception as e:
+        logger.warning(f"Could not patch httpx: {e}")
+
+
 def get_supabase():
     """Lazily create Supabase client (after proxy env vars are cleaned)"""
     global _supabase_client
@@ -87,6 +114,7 @@ def get_supabase():
                 "REACT_APP_SUPABASE_ANON_KEY or SUPABASE_URL / SUPABASE_KEY."
             )
         _clean_proxy_env()
+        _patch_httpx_proxy()
         _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
         logger.info("Supabase client initialized (lazy)")
     return _supabase_client
