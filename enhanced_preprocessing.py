@@ -776,7 +776,15 @@ def download_image(storage_link: str, bucket: str = IMAGE_BUCKET, expires_sec: i
     # 2) get signed URL
     logger.info(f"Getting signed URL for: {bucket}/{internal_path}")
     signed = get_supabase().storage.from_(bucket).create_signed_url(internal_path, expires_sec)
-    signed_url = signed["signedUrl"]
+    logger.info(f"Signed URL response keys: {list(signed.keys()) if isinstance(signed, dict) else type(signed)}")
+    # Handle different supabase-py versions (signedUrl vs signedURL vs signed_url)
+    signed_url = (
+        signed.get("signedUrl")
+        or signed.get("signedURL")
+        or signed.get("signed_url")
+    )
+    if not signed_url:
+        raise ValueError(f"Could not extract signed URL from response: {signed}")
 
     # 3) fetch bytes
     r = requests.get(signed_url)
@@ -1039,30 +1047,35 @@ def classify_chart_type_and_decide_pipeline(image_path: str, image_id: str):
         logger.error(f"Error in chart type classification: {e}")
         return "sam_pipeline", None
 
-def process_with_sam_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str = None):
-    """Process image with standard SAM pipeline (uses HuggingFace API or local fallback)"""
+def process_with_sam_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str = None) -> bool:
+    """Process image with standard SAM pipeline. Returns True if masks were saved."""
     try:
-        # Generate masks using HuggingFace API (primary) or local model (fallback)
         masks = generate_masks(img_np, temp_image_path)
-        
+
         if masks:
             logger.info(f"Generated {len(masks)} masks for image")
             save_masks(image_id, masks)
             logger.info("Masks saved successfully!")
+            return True
         else:
-            logger.warning("No masks generated - both HuggingFace API and local model failed")
+            logger.warning("No masks generated - HuggingFace API failed")
+            return False
     except Exception as e:
         logger.error(f"Error in SAM processing: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
 
-def process_with_medsam_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str = None):
-    """Process image with MedSAM-like pipeline (masks + embeddings via HuggingFace API)"""
+def process_with_medsam_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str = None) -> bool:
+    """Process image with MedSAM-like pipeline. Returns True if masks were saved."""
+    masks_saved = False
     try:
-        # Generate SAM masks using HuggingFace API
         masks = generate_masks(img_np, temp_image_path)
-        
+
         if masks:
             logger.info(f"Generated {len(masks)} masks for medical image")
             save_masks(image_id, masks)
+            masks_saved = True
         else:
             logger.warning("No masks generated for medical image")
 
@@ -1075,64 +1088,81 @@ def process_with_medsam_pipeline(image_id: str, img_np: np.ndarray, temp_image_p
                 logger.warning(f"Embedding generation failed for {image_id}")
     except Exception as e:
         logger.error(f"Error in MedSAM processing: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+    return masks_saved
 
-def process_with_science_analyzer_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str):
-    """Process image with HF Space API pipeline"""
+def process_with_science_analyzer_pipeline(image_id: str, img_np: np.ndarray, temp_image_path: str) -> bool:
+    """Process image with HF Space API pipeline + SAM mask generation.
+    Returns True if masks or chart elements/text elements were saved."""
+    saved_anything = False
     try:
         logger.info(f"Calling HF Space API for image {image_id}")
-        
+
         # Call HF Space API for full scientific analysis
         hf_response = call_hf_space_api(temp_image_path)
-        
+
         if not hf_response:
             logger.error(f"HF Space API returned no response for image {image_id}")
-            return
-        
-        # Parse the HF Space response
-        analysis_results = parse_hf_space_response(hf_response)
-        
-        if not analysis_results:
-            logger.error(f"Failed to parse HF Space response for image {image_id}")
-            return
-        
-        # Save chart type if available
-        chart_type = analysis_results.get('chart_type')
-        if chart_type:
-            save_chart_analysis(image_id, chart_type, analysis_results.get('chart_type_confidence', 0.9))
-            logger.info(f"Saved chart type: {chart_type}")
-        
-        # Save chart elements
-        chart_elements = analysis_results.get('chart_elements', [])
-        if chart_elements:
-            # Log confidence distribution
-            confidences = [elem.get('confidence', 0) for elem in chart_elements]
-            logger.info(f"Chart element confidence range: {min(confidences):.3f} - {max(confidences):.3f}")
-            logger.info(f"Chart elements with confidence >= 0.4: {sum(1 for c in confidences if c >= 0.4)}")
-            logger.info(f"Chart elements with confidence >= 0.1: {sum(1 for c in confidences if c >= 0.1)}")
-            
-            save_chart_elements(image_id, chart_elements)
-            logger.info(f"Saved {len(chart_elements)} chart elements")
-        
-        # Step 2: Use local EasyOCR for text detection
+        else:
+            # Parse the HF Space response
+            analysis_results = parse_hf_space_response(hf_response)
+
+            if not analysis_results:
+                logger.error(f"Failed to parse HF Space response for image {image_id}")
+            else:
+                # Save chart type if available
+                chart_type = analysis_results.get('chart_type')
+                if chart_type:
+                    save_chart_analysis(image_id, chart_type, analysis_results.get('chart_type_confidence', 0.9))
+                    logger.info(f"Saved chart type: {chart_type}")
+
+                # Save chart elements
+                chart_elements = analysis_results.get('chart_elements', [])
+                if chart_elements:
+                    confidences = [elem.get('confidence', 0) for elem in chart_elements]
+                    logger.info(f"Chart element confidence range: {min(confidences):.3f} - {max(confidences):.3f}")
+                    logger.info(f"Chart elements with confidence >= 0.4: {sum(1 for c in confidences if c >= 0.4)}")
+                    logger.info(f"Chart elements with confidence >= 0.1: {sum(1 for c in confidences if c >= 0.1)}")
+
+                    save_chart_elements(image_id, chart_elements)
+                    logger.info(f"Saved {len(chart_elements)} chart elements")
+                    saved_anything = True
+
+        # Use local EasyOCR for text detection
         logger.info(f"Running local EasyOCR for text detection on image {image_id}")
         text_elements = perform_local_ocr(img_np)
-        
+
         if text_elements:
-            # Log confidence distribution
             confidences = [elem.get('confidence', 0) for elem in text_elements]
             logger.info(f"Local OCR text element confidence range: {min(confidences):.3f} - {max(confidences):.3f}")
             logger.info(f"Local OCR text elements with confidence >= 0.4: {sum(1 for c in confidences if c >= 0.4)}")
             logger.info(f"Local OCR text elements with confidence >= 0.1: {sum(1 for c in confidences if c >= 0.1)}")
-            
+
             save_text_elements(image_id, text_elements)
             logger.info(f"Saved {len(text_elements)} text elements from local OCR")
+            saved_anything = True
         else:
             logger.info("No text elements detected by local OCR")
-        
-        logger.info("HF Space API + Local OCR pipeline completed successfully!")
-        
+
+        # Also generate SAM masks so the segment linking flow works
+        logger.info(f"Generating SAM masks for science image {image_id}")
+        masks = generate_masks(img_np, temp_image_path)
+        if masks:
+            logger.info(f"Generated {len(masks)} SAM masks for science image {image_id}")
+            save_masks(image_id, masks)
+            saved_anything = True
+        else:
+            logger.warning(f"No SAM masks generated for science image {image_id}")
+
+        logger.info("Science analyzer pipeline completed successfully!")
+        return saved_anything
+
     except Exception as e:
-        logger.error(f"Error in HF Space API processing: {e}")
+        logger.error(f"Error in science analyzer processing: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
 
 def save_temp_image(img_np: np.ndarray, image_id: str) -> str:
     """Save image temporarily for analysis"""
@@ -1150,55 +1180,70 @@ def cleanup_temp_image(temp_path: str):
 
 # ─── PROCESSING ────────────────────────────────────────────────────────────
 def process_task(task_id: str):
-    """Enhanced preprocessing for a single task"""
+    """Enhanced preprocessing for a single task.
+    Only marks the task as ready when at least one image has masks/elements saved."""
     images = fetch_images_for_task(task_id)
     logger.info(f"Processing task {task_id} with {len(images)} images")
-    
+
+    any_image_succeeded = False
+
     for img_rec in images:
         img_id = img_rec['id']
         logger.info(f"Processing image {img_id}")
         temp_image_path = None
-        
+
         try:
             # Download image
             img_np = download_image(img_rec['storage_link'])
             logger.info(f"Image {img_id} downloaded successfully!")
-            
+
             # Save temporary image for analysis
             temp_image_path = save_temp_image(img_np, img_id)
-            
+
             # Classify chart type and decide pipeline
             pipeline_type, chart_type = classify_chart_type_and_decide_pipeline(temp_image_path, img_id)
-            
-            # Execute appropriate pipeline
+
+            # Execute appropriate pipeline and track success
+            success = False
             if pipeline_type == "medsam_pipeline":
-                process_with_medsam_pipeline(img_id, img_np, temp_image_path)
+                success = process_with_medsam_pipeline(img_id, img_np, temp_image_path)
             elif pipeline_type == "science_analyzer_pipeline":
-                process_with_science_analyzer_pipeline(img_id, img_np, temp_image_path)
+                success = process_with_science_analyzer_pipeline(img_id, img_np, temp_image_path)
             elif pipeline_type == "skip_science_analyzer":
-                # logger.info(f"Skipping science analyzer for image {img_id} (chart type: {chart_type})")
                 logger.info(f"Running medsam pipeline for image {img_id} (chart type: {chart_type})")
-                process_with_medsam_pipeline(img_id, img_np, temp_image_path)
-                # Only chart type is saved, nothing else to do
+                success = process_with_medsam_pipeline(img_id, img_np, temp_image_path)
             else:  # default to SAM pipeline
-                process_with_sam_pipeline(img_id, img_np, temp_image_path)
-            
+                success = process_with_sam_pipeline(img_id, img_np, temp_image_path)
+
+            if success:
+                any_image_succeeded = True
+                logger.info(f"Image {img_id} processed successfully (masks/elements saved)")
+            else:
+                logger.warning(f"Image {img_id} pipeline completed but no masks/elements were saved")
+
             # Cleanup
             if temp_image_path:
                 cleanup_temp_image(temp_image_path)
-            logger.info(f"Image {img_id} processed successfully!")
-            
+
         except Exception as e:
             logger.error(f"Error processing image {img_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             if temp_image_path:
                 cleanup_temp_image(temp_image_path)
 
-    # Mark task as ready
-    try:
-        get_supabase().table(TASKS_TABLE).update({'isReady': True}).eq('id', task_id).execute()
-        logger.info(f"Task {task_id} marked as ready")
-    except Exception as e:
-        logger.error(f"Error marking task {task_id} as ready: {e}")
+    # Only mark task as ready if at least one image had masks/elements saved
+    if any_image_succeeded:
+        try:
+            get_supabase().table(TASKS_TABLE).update({'isReady': True}).eq('id', task_id).execute()
+            logger.info(f"Task {task_id} marked as ready (masks/elements saved for at least one image)")
+        except Exception as e:
+            logger.error(f"Error marking task {task_id} as ready: {e}")
+    else:
+        logger.error(
+            f"Task {task_id} NOT marked as ready: no images had masks/elements saved. "
+            f"Total images attempted: {len(images)}"
+        )
 
 def process_task_async(task_id: str):
     """Process a task asynchronously (for background processing)"""
@@ -1208,6 +1253,8 @@ def process_task_async(task_id: str):
         logger.info(f"Async processing completed for task {task_id}")
     except Exception as e:
         logger.error(f"Error in async processing for task {task_id}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 def main():
     """Main processing loop"""
