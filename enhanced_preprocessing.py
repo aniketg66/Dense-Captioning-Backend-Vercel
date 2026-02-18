@@ -112,31 +112,41 @@ def get_supabase():
 
 
 def get_hf_mask_client():
-    """Lazily create HuggingFace mask client"""
+    """Lazily create HuggingFace mask client.
+    Only caches when the client is successfully connected AND the SAM-H model is loaded.
+    If the model isn't ready yet, retries on the next call."""
     global _hf_mask_client, _hf_mask_client_initialized
     if _hf_mask_client_initialized:
         return _hf_mask_client
-    _hf_mask_client_initialized = True
 
     if not GRADIO_CLIENT_AVAILABLE or not USE_HF_FOR_MASKS:
+        _hf_mask_client_initialized = True
         return None
 
     try:
         _clean_proxy_env()
         logger.info(f"Connecting to HuggingFace Space: {MEDSAM_HF_SPACE}")
-        _hf_mask_client = GradioClient(MEDSAM_HF_SPACE)
+        client = GradioClient(MEDSAM_HF_SPACE)
         try:
-            status_result = _hf_mask_client.predict(api_name="/check_auto_mask_status")
+            status_result = client.predict(api_name="/check_auto_mask_status")
             status = json.loads(status_result)
             if status.get('available'):
                 logger.info(f"HuggingFace auto mask generation available (device: {status.get('device')})")
+                _hf_mask_client = client
+                _hf_mask_client_initialized = True
             else:
-                logger.warning("HuggingFace Space connected but SAM-H model not loaded")
+                logger.error(
+                    "HuggingFace Space connected but SAM-H model not loaded. "
+                    "Mask generation will not work. Will retry on next call."
+                )
+                # Don't cache — retry on next call in case the Space finishes loading
+                return None
         except Exception as e:
-            logger.warning(f"Could not check HuggingFace auto mask status: {e}")
+            logger.warning(f"Could not check HuggingFace auto mask status: {e}. Will retry on next call.")
+            return None
     except Exception as e:
-        logger.warning(f"Could not connect to HuggingFace Space: {e}")
-        _hf_mask_client = None
+        logger.warning(f"Could not connect to HuggingFace Space: {e}. Will retry on next call.")
+        return None
 
     return _hf_mask_client
 
